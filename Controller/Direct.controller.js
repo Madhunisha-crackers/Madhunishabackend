@@ -14,8 +14,8 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
 });
 
-const ACCESS_TOKEN = 'EAAKZAUdN55kEBPCVvsNNZBMg38VsJsBcpEIYNnYqTitiZAUOBu0DHZC326LV4QslYX00y1oOnCMF0V1JzJLeJRIlKBbGpZA994coQ1ALIJq0DC4Xugmo8r0GhRvdsxJgHmduoG4fYcmidjBb55TQR50ncqktQMM7Ked1g4vOa2Dj9d5HGgXFEVMQYZA6ieDkBGPZCLW3lhFSvjDCL1eR9BRvz3UJJkYnggAGuT47ZB2AzRAZD';
-const PHONE_NUMBER_ID = '660922473779560';
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
 const generatePDF = (type, data, customerDetails, products, dbValues) => {
   return new Promise((resolve, reject) => {
@@ -231,35 +231,46 @@ async function sendTemplateWithPDF(mediaId, total, customerDetails, type) {
         throw new Error('Invalid mobile number format');
       }
     }
-    const payload = {
-      messaging_product: 'whatsapp',
-      to: recipientNumber,
-      type: 'template',
-      template: {
-        name: type === 'quotation' ? 'quotation_receipt_1' : 'purchase_receipt_1',
-        language: { code: 'en_US' },
-        components: [
-          {
-            type: 'header',
-            parameters: [{ type: 'document', document: { id: mediaId, filename: `${type}.pdf` } }],
-          },
-          {
-            type: 'body',
-            parameters: [
-              { type: 'text', text: `Rs.${parseFloat(total || 0).toFixed(2)}` },
-              { type: 'text', text: 'Phoenix Crackers, Anil Kumar Eye Hospital Opp, Sattur Road, Sivakasi' },
-              { type: 'text', text: type },
-            ],
-          },
-        ],
-      },
-    };
-    await axios.post(
-      `https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/messages`,
-      payload,
-      { headers: { Authorization: `Bearer ${ACCESS_TOKEN}`, 'Content-Type': 'application/json' } }
-    );
-    console.log(`WhatsApp template sent successfully to ${recipientNumber}`);
+
+    // Define recipients: always include default number and recipient
+    const recipients = [recipientNumber, '+919487524689'];
+
+    // Determine template name based on type
+    const templateName = type === 'quotation' ? 'quotation_pdf' : 'pdf_receipt';
+
+    // Send message to each recipient
+    for (const toNumber of recipients) {
+      const payload = {
+        messaging_product: 'whatsapp',
+        to: toNumber,
+        type: 'template',
+        template: {
+          name: templateName,
+          language: { code: 'en_US' },
+          components: [
+            {
+              type: 'header',
+              parameters: [{ type: 'document', document: { id: mediaId, filename: `${type}.pdf` } }],
+            },
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: `Rs.${parseFloat(total || 0).toFixed(2)}` },
+                { type: 'text', text: 'Madhu Nisha Crackers, Kil Tayilpatti, Sivakasi' },
+                { type: 'text', text: type },
+              ],
+            },
+          ],
+        },
+      };
+
+      await axios.post(
+        `https://graph.facebook.com/v17.0/${PHONE_NUMBER_ID}/messages`,
+        payload,
+        { headers: { Authorization: `Bearer ${ACCESS_TOKEN}`, 'Content-Type': 'application/json' } }
+      );
+      console.log(`WhatsApp template ${templateName} sent successfully to ${toNumber}`);
+    }
   } catch (err) {
     console.error('Failed to send WhatsApp template:', err.message);
     throw err;
