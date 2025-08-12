@@ -256,7 +256,7 @@ async function sendTemplateWithPDF(mediaId, total, customerDetails, type) {
               type: 'body',
               parameters: [
                 { type: 'text', text: `Rs.${parseFloat(total || 0).toFixed(2)}` },
-                { type: 'text', text: 'Madhu Nisha Crackers, Kil Tayilpatti, Sivakasi' },
+                { type: 'text', text: 'Madhu Nisha Pyrotech, Kil Tayilpatti, Sivakasi' },
                 { type: 'text', text: type },
               ],
             },
