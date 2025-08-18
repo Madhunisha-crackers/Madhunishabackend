@@ -58,7 +58,7 @@ async function sendStatusUpdate(mobileNumber, status, transportDetails = null) {
     to: recipientNumber,
     type: 'template',
     template: {
-      name: 'hello_world', // Replace with your actual WhatsApp template name
+      name: 'hello_world',
       language: { code: 'en_US' },
       components: [
         {

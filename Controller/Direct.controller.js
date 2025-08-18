@@ -277,7 +277,7 @@ async function sendTemplateWithPDF(mediaId, total, customerDetails, type) {
   }
 }
 
-async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, products, type) {
+async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, products, type, status = 'booked', transportDetails = null) {
   try {
     if (!fs.existsSync(pdfPath)) {
       console.error(`PDF file does not exist for email: ${pdfPath}`);
@@ -295,19 +295,89 @@ async function sendBookingEmail(toEmail, bookingData, customerDetails, pdfPath, 
       `- ${p.productname || 'N/A'}: ${p.quantity || 1} x Rs.${parseFloat(p.price || 0).toFixed(2)}`
     ).join('\n');
 
-    const mailOptions = {
-      from: '"Madhu Nisha Crackers" <madhunishapyrotechsivakasi@gmail.com>',
-      to: toEmail,
-      subject: `New ${type === 'quotation' ? 'Quotation' : 'Booking'}: ${bookingData.quotation_id || bookingData.order_id}`,
-      text: `
-A new ${type} has been made.
+    let subject, text;
+    const idField = type === 'quotation' ? 'Quotation ID' : 'Order ID';
+    const idValue = bookingData.quotation_id || bookingData.order_id;
 
+    if (toEmail === 'madhunishapyrotechsivakasi@gmail.com' && type === 'invoice' && status === 'booked') {
+      // New booking notification for admin
+      subject = `New Booking Notification: Order ${idValue}`;
+      text = `
+A new booking has been made with Madhu Nisha Crackers.
+
+Booking Details:
+${idField}: ${idValue}
 Customer Name: ${customerDetails.customer_name || 'N/A'}
 Mobile: ${customerDetails.mobile_number || 'N/A'}
 Email: ${customerDetails.email || 'N/A'}
+Address: ${customerDetails.address || 'N/A'}
 District: ${customerDetails.district || 'N/A'}
 State: ${customerDetails.state || 'N/A'}
-${type === 'quotation' ? 'Quotation ID' : 'Order ID'}: ${bookingData.quotation_id || bookingData.order_id}
+Customer Type: ${bookingData.customer_type || 'User'}
+Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
+You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Attached is the estimate bill for reference.
+
+Best regards,
+Madhu Nisha Crackers Team
+      `;
+    } else if (toEmail === 'madhunishapyrotechsivakasi@gmail.com' && type === 'invoice' && status === 'paid') {
+      // New payment notification for admin
+      subject = `New Payment Notification: Order ${idValue}`;
+      text = `
+A payment has been received for Order ${idValue}.
+
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Order ID: ${idValue}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Attached is the estimate bill for reference.
+
+Best regards,
+Madhu Nisha Crackers Team
+      `;
+    } else if (type === 'invoice' && status === 'booked') {
+      subject = `Thank You for Your Booking! Order ${idValue}`;
+      text = `
+Dear ${customerDetails.customer_name || 'Customer'},
+
+Thank you for your booking with Madhu Nisha Crackers!
+
+Booking Details:
+${idField}: ${idValue}
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Mobile: ${customerDetails.mobile_number || 'N/A'}
+Email: ${customerDetails.email || 'N/A'}
+Address: ${customerDetails.address || 'N/A'}
+District: ${customerDetails.district || 'N/A'}
+State: ${customerDetails.state || 'N/A'}
+Customer Type: ${bookingData.customer_type || 'User'}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Attached is your estimate bill for reference.
+
+For any queries, contact us at +91 96006 08504.
+
+Best regards,
+Madhu Nisha Crackers Team
+      `;
+    } else if (type === 'invoice' && status === 'paid') {
+      subject = `Payment Received for Order ${idValue}`;
+      text = `
+Dear ${customerDetails.customer_name || 'Customer'},
+
+Thank you for your payment for Order ${idValue}!
+
+Booking Details:
+${idField}: ${idValue}
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Mobile: ${customerDetails.mobile_number || 'N/A'}
+Email: ${customerDetails.email || 'N/A'}
+Address: ${customerDetails.address || 'N/A'}
+District: ${customerDetails.district || 'N/A'}
+State: ${customerDetails.state || 'N/A'}
 Customer Type: ${bookingData.customer_type || 'User'}
 Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
 You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
@@ -315,7 +385,45 @@ Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
 
 Products:
 ${productList}
-    `,
+
+${transportDetails ? `Transport Details:\n${Object.entries(transportDetails).map(([key, value]) => `${key}: ${value}`).join('\n')}\n` : ''}
+
+Attached is your estimate bill for reference.
+
+For any queries, contact us at +91 96006 08504.
+
+Best regards,
+Madhu Nisha Crackers Team
+      `;
+    } else {
+      subject = `New ${type === 'quotation' ? 'Quotation' : 'Booking'}: ${idValue}`;
+      text = `
+A new ${type} has been made.
+
+Customer Name: ${customerDetails.customer_name || 'N/A'}
+Mobile: ${customerDetails.mobile_number || 'N/A'}
+Email: ${customerDetails.email || 'N/A'}
+Address: ${customerDetails.address || 'N/A'}
+District: ${customerDetails.district || 'N/A'}
+State: ${customerDetails.state || 'N/A'}
+${idField}: ${idValue}
+Customer Type: ${bookingData.customer_type || 'User'}
+Net Rate: Rs.${parseFloat(bookingData.net_rate || 0).toFixed(2)}
+You Save: Rs.${parseFloat(bookingData.you_save || 0).toFixed(2)}
+Total: Rs.${parseFloat(bookingData.total || 0).toFixed(2)}
+
+Attached is the estimate bill for reference.
+
+Best regards,
+Madhu Nisha Crackers Team
+      `;
+    }
+
+    const mailOptions = {
+      from: '"Madhu Nisha Crackers" <madhunishapyrotechsivakasi@gmail.com>',
+      to: toEmail,
+      subject,
+      text,
       attachments: [
         {
           filename: path.basename(pdfPath),
@@ -533,6 +641,7 @@ exports.createQuotation = async (req, res) => {
       pdfPath
     ]);
 
+    // Send WhatsApp message with PDF
     try {
       const mediaId = await uploadPDF(pdfPath);
       await sendTemplateWithPDF(mediaId, parsedTotal, customerDetails, 'quotation');
@@ -540,6 +649,7 @@ exports.createQuotation = async (req, res) => {
       console.error('WhatsApp PDF sending failed:', err);
     }
 
+    // Send admin notification email
     await sendBookingEmail(
       'madhunishacrackers@gmail.com',
       {
@@ -554,6 +664,25 @@ exports.createQuotation = async (req, res) => {
       products,
       'quotation'
     );
+
+    // Send thank-you email to customer if email is provided
+    if (customerDetails.email) {
+      await sendBookingEmail(
+        customerDetails.email,
+        {
+          quotation_id,
+          customer_type: finalCustomerType,
+          net_rate: parsedNetRate,
+          you_save: parsedYouSave,
+          total: parsedTotal
+        },
+        customerDetails,
+        pdfPath,
+        products,
+        'quotation',
+        'pending' // Status for thank-you email
+      );
+    }
 
     res.status(201).json({
       message: 'Quotation created successfully',
@@ -938,7 +1067,7 @@ exports.createBooking = async (req, res) => {
     `, [
       customer_id || null,
       order_id,
-      quotation_id || null, // Include quotation_id if provided
+      quotation_id || null,
       JSON.stringify(products),
       parsedNetRate,
       parsedYouSave,
@@ -972,6 +1101,7 @@ exports.createBooking = async (req, res) => {
       );
     }
 
+    // Send WhatsApp message with PDF
     try {
       const mediaId = await uploadPDF(pdfPath);
       await sendTemplateWithPDF(mediaId, parsedTotal, customerDetails, 'invoice');
@@ -979,7 +1109,7 @@ exports.createBooking = async (req, res) => {
       console.error('WhatsApp PDF sending failed:', err);
     }
 
-    // Send email to admin
+    // Send admin notification email
     await sendBookingEmail(
       'madhunishacrackers@gmail.com',
       {
@@ -992,10 +1122,11 @@ exports.createBooking = async (req, res) => {
       customerDetails,
       pdfPath,
       products,
-      'invoice'
+      'invoice',
+      'booked'
     );
 
-    // Send email to customer if email exists
+    // Send thank-you email to customer if email is provided
     if (customerDetails.email) {
       await sendBookingEmail(
         customerDetails.email,
@@ -1024,7 +1155,7 @@ exports.createBooking = async (req, res) => {
       customer_type: bookingResult.rows[0].customer_type,
       pdf_path: bookingResult.rows[0].pdf,
       order_id: bookingResult.rows[0].order_id,
-      quotation_id // Return quotation_id for frontend use
+      quotation_id
     });
   } catch (err) {
     await pool.query('ROLLBACK');
