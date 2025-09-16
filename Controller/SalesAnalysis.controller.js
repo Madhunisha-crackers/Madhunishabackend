@@ -10,161 +10,175 @@ const pool = new Pool({
 
 exports.getSalesAnalysis = async (req, res) => {
   try {
-    // Fetch products from bookings and quotations
+    // Validate JSONB structure for products
+    const validateProducts = await pool.query(`
+      SELECT COUNT(*) AS invalid_count
+      FROM public.bookings
+      WHERE status IN ('booked', 'paid', 'dispatched', 'packed', 'delivered') AND (products::jsonb IS NULL OR jsonb_typeof(products::jsonb) != 'array')
+      UNION ALL
+      SELECT COUNT(*) AS invalid_count
+      FROM public.quotations
+      WHERE status IN ('booked', 'pending') AND (products::jsonb IS NULL OR jsonb_typeof(products::jsonb) != 'array')
+    `);
+    if (validateProducts.rows.some(row => row.invalid_count > 0)) {
+      console.warn('Invalid products JSONB found:', validateProducts.rows);
+    }
+
+    // Fetch products (quantity only)
     const products = await pool.query(`
       SELECT 
-        jsonb_array_elements(products::jsonb)->>'productname' AS productname,
-        (jsonb_array_elements(products::jsonb)->>'quantity')::integer AS quantity,
-        (jsonb_array_elements(products::jsonb)->>'price')::numeric AS price,
-        (jsonb_array_elements(products::jsonb)->>'discount')::numeric AS discount
-      FROM public.bookings
-      WHERE status = 'booked'
+        p.product->>'productname' AS productname,
+        COALESCE((p.product->>'quantity')::integer, 0) AS quantity
+      FROM public.bookings b
+      CROSS JOIN LATERAL jsonb_array_elements(b.products::jsonb) AS p(product)
+      WHERE LOWER(b.status) IN ('booked', 'paid', 'dispatched', 'packed', 'delivered')
       UNION ALL
       SELECT 
-        jsonb_array_elements(products::jsonb)->>'productname' AS productname,
-        (jsonb_array_elements(products::jsonb)->>'quantity')::integer AS quantity,
-        (jsonb_array_elements(products::jsonb)->>'price')::numeric AS price,
-        (jsonb_array_elements(products::jsonb)->>'discount')::numeric AS discount
-      FROM public.quotations
-      WHERE status = 'booked'
+        p.product->>'productname' AS productname,
+        COALESCE((p.product->>'quantity')::integer, 0) AS quantity
+      FROM public.quotations q
+      CROSS JOIN LATERAL jsonb_array_elements(q.products::jsonb) AS p(product)
+      WHERE LOWER(q.status) IN ('booked', 'pending')
     `);
 
     const productSummary = products.rows.reduce((acc, row) => {
-      const { productname, quantity, price, discount } = row;
-      if (!productname) return acc; // Skip invalid products
-      if (!acc[productname]) {
-        acc[productname] = { quantity: 0, revenue: 0, discount: 0 };
+      const { productname, quantity } = row;
+      if (!productname) {
+        console.log('Skipping row with missing productname:', row);
+        return acc;
       }
-      const unitPrice = parseFloat(price) || 0;
-      const unitDiscount = parseFloat(discount) || 0;
-      const unitQuantity = parseInt(quantity) || 0;
-      acc[productname].quantity += unitQuantity;
-      acc[productname].revenue += unitQuantity * (unitPrice - (unitPrice * unitDiscount / 100));
-      acc[productname].discount += unitQuantity * (unitPrice * unitDiscount / 100);
+      if (!acc[productname]) {
+        acc[productname] = { quantity: 0 };
+      }
+      acc[productname].quantity += parseInt(quantity) || 0;
       return acc;
     }, {});
 
     const productData = Object.entries(productSummary).map(([productname, data]) => ({
       productname,
-      quantity: data.quantity,
-      revenue: data.revenue,
-      avg_discount: data.quantity > 0 ? (data.discount / (data.quantity * (data.revenue + data.discount) / data.quantity)) * 100 : 0
+      quantity: data.quantity
     }));
 
-    // Fetch regional demand (cities)
+    // Fetch regional demand (cities) using total column
     const cities = await pool.query(`
-      SELECT district, COUNT(*) AS count, SUM(total::numeric) AS revenue
+      SELECT 
+        district, 
+        COUNT(*) AS count, 
+        SUM(COALESCE(total::numeric, 0)) AS total_amount
       FROM public.bookings
-      WHERE status = 'booked'
+      WHERE LOWER(status) IN ('booked', 'paid', 'dispatched', 'packed', 'delivered')
       GROUP BY district
       UNION ALL
-      SELECT district, COUNT(*) AS count, SUM(total::numeric) AS revenue
+      SELECT 
+        district, 
+        COUNT(*) AS count, 
+        SUM(COALESCE(total::numeric, 0)) AS total_amount
       FROM public.quotations
-      WHERE status = 'booked'
+      WHERE LOWER(status) IN ('booked', 'pending')
       GROUP BY district
     `);
 
     const citySummary = cities.rows.reduce((acc, row) => {
       const district = row.district || 'Unknown';
       if (!acc[district]) {
-        acc[district] = { count: 0, revenue: 0 };
+        acc[district] = { count: 0, total_amount: 0 };
       }
-      acc[district].count += parseInt(row.count);
-      acc[district].revenue += parseFloat(row.revenue) || 0;
+      acc[district].count += parseInt(row.count) || 0;
+      acc[district].total_amount += parseFloat(row.total_amount) || 0;
       return acc;
     }, {});
 
     const cityData = Object.entries(citySummary).map(([district, data]) => ({
       district,
       count: data.count,
-      revenue: data.revenue
+      total_amount: data.total_amount
     }));
 
-    // Fetch historical trends
+    // Fetch historical trends using total and amount_paid columns from bookings only
     const historical = await pool.query(`
       SELECT 
-        analysis_date, 
-        highest_total,
-        created_at
-      FROM public.sales_analysis 
-      ORDER BY analysis_date ASC
+        TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM') AS month,
+        COUNT(*) AS volume,
+        SUM(COALESCE(total::numeric, 0)) AS total_amount,
+        SUM(COALESCE(amount_paid::numeric, 0)) AS amount_paid
+      FROM public.bookings
+      WHERE LOWER(status) IN ('booked', 'paid', 'dispatched', 'packed', 'delivered')
+      GROUP BY TO_CHAR(DATE_TRUNC('month', created_at), 'YYYY-MM')
+      ORDER BY month
     `);
 
-    const monthlyTrends = historical.rows.reduce((acc, row) => {
-      const date = new Date(row.created_at);
-      const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-      if (!acc[monthYear]) {
-        acc[monthYear] = { volume: 0, revenue: 0 };
-      }
-      acc[monthYear].volume += 1;
-      acc[monthYear].revenue += parseFloat(row.highest_total) || 0;
-      return acc;
-    }, {});
-
-    const trendData = Object.entries(monthlyTrends).map(([month, data]) => ({
-      month,
-      volume: data.volume,
-      revenue: data.revenue
+    const trendDataArray = historical.rows.map(row => ({
+      month: row.month,
+      volume: parseInt(row.volume) || 0,
+      total_amount: parseFloat(row.total_amount) || 0,
+      amount_paid: parseFloat(row.amount_paid) || 0,
+      unpaid_amount: (parseFloat(row.total_amount) || 0) - (parseFloat(row.amount_paid) || 0)
     })).sort((a, b) => a.month.localeCompare(b.month));
 
-    // Fetch profitability metrics (Updated: total_revenue = net_rate + processing_fee)
+    // Fetch profitability metrics using total and amount_paid columns from bookings only
     const profitability = await pool.query(`
       SELECT 
-        SUM((net_rate::numeric + COALESCE(processing_fee::numeric, 0))) AS total_revenue,
-        SUM(COALESCE(processing_fee::numeric, 0)) AS total_fees,
-        SUM(COALESCE(you_save::numeric, 0)) AS total_discounts
+        SUM(COALESCE(total::numeric, 0)) AS total_amount,
+        SUM(COALESCE(amount_paid::numeric, 0)) AS amount_paid
       FROM public.bookings
-      WHERE status = 'booked'
     `);
 
-    const profitData = profitability.rows[0] || { total_revenue: 0, total_fees: 0, total_discounts: 0 };
+    const profitRow = profitability.rows[0] || { total_amount: 0, amount_paid: 0 };
+    const profitData = {
+      total_amount: profitRow.total_amount,
+      amount_paid: profitRow.amount_paid,
+      unpaid_amount: profitRow.total_amount - profitRow.amount_paid
+    };
 
-    // Fetch quotation conversion rates
+    // Fetch quotation conversion rates using total column
     const quotations = await pool.query(`
-      SELECT status, COUNT(*) AS count, SUM(total::numeric) AS revenue
+      SELECT 
+        LOWER(status) AS status, 
+        COUNT(*) AS count, 
+        SUM(COALESCE(total::numeric, 0)) AS total_amount
       FROM public.quotations
-      GROUP BY status
+      GROUP BY LOWER(status)
     `);
 
     const quotationSummary = quotations.rows.reduce((acc, row) => {
-      acc[row.status] = { count: parseInt(row.count), revenue: parseFloat(row.revenue) || 0 };
+      acc[row.status] = { count: parseInt(row.count), total_amount: parseFloat(row.total_amount) || 0 };
       return acc;
-    }, { pending: { count: 0, revenue: 0 }, booked: { count: 0, revenue: 0 }, canceled: { count: 0, revenue: 0 } });
+    }, { pending: { count: 0, total_amount: 0 }, booked: { count: 0, total_amount: 0 }, canceled: { count: 0, total_amount: 0 } });
 
-    // Fetch customer type analysis
+    // Fetch customer type analysis using total column
     const customerTypes = await pool.query(`
       SELECT 
         customer_type, 
         COUNT(*) AS count, 
-        SUM(total::numeric) AS revenue
+        SUM(COALESCE(total::numeric, 0)) AS total_amount
       FROM public.bookings
-      WHERE status = 'booked'
+      WHERE LOWER(status) IN ('booked', 'paid', 'dispatched', 'packed', 'delivered') AND customer_type IS NOT NULL
       GROUP BY customer_type
     `);
 
     const customerTypeData = customerTypes.rows.map(row => ({
       customer_type: row.customer_type || 'Unknown',
       count: parseInt(row.count),
-      revenue: parseFloat(row.revenue) || 0
+      total_amount: parseFloat(row.total_amount) || 0
     }));
 
-    // Fetch cancellations
+    // Fetch cancellations using total column
     const cancellations = await pool.query(`
       SELECT 
         'booking' AS type, 
         order_id, 
-        total::numeric AS total, 
+        COALESCE(total::numeric, 0) AS total, 
         created_at
       FROM public.bookings
-      WHERE status = 'canceled'
+      WHERE LOWER(status) = 'canceled'
       UNION ALL
       SELECT 
         'quotation' AS type, 
         quotation_id AS order_id, 
-        total::numeric AS total, 
+        COALESCE(total::numeric, 0) AS total, 
         created_at
       FROM public.quotations
-      WHERE status = 'canceled'
+      WHERE LOWER(status) = 'canceled'
     `);
 
     const cancellationData = cancellations.rows.map(row => ({
@@ -177,19 +191,18 @@ exports.getSalesAnalysis = async (req, res) => {
     res.status(200).json({
       products: productData,
       cities: cityData,
-      trends: trendData,
-      profitability: {
-        total_revenue: parseFloat(profitData.total_revenue) || 0,
-        total_fees: parseFloat(profitData.total_fees) || 0,
-        total_discounts: parseFloat(profitData.total_discounts) || 0,
-        estimated_profit: (parseFloat(profitData.total_revenue) || 0) - (parseFloat(profitData.total_discounts) || 0)
-      },
+      trends: trendDataArray,
+      profitability: profitData,
       quotations: quotationSummary,
       customer_types: customerTypeData,
       cancellations: cancellationData
     });
   } catch (err) {
-    console.error('Failed to fetch sales analysis:', err.message);
+    console.error('Failed to fetch sales analysis:', {
+      message: err.message,
+      stack: err.stack,
+      query: err.query || 'N/A'
+    });
     res.status(500).json({ message: 'Failed to fetch sales analysis', error: err.message });
   }
 };
