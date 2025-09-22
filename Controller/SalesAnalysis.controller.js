@@ -54,10 +54,12 @@ exports.getSalesAnalysis = async (req, res) => {
       return acc;
     }, {});
 
-    const productData = Object.entries(productSummary).map(([productname, data]) => ({
-      productname,
-      quantity: data.quantity
-    }));
+    const productData = Object.entries(productSummary)
+      .map(([productname, data]) => ({
+        productname,
+        quantity: data.quantity
+      }))
+      .sort((a, b) => b.quantity - a.quantity); // Sort by quantity in descending order
 
     // Fetch regional demand (cities) using total column
     const cities = await pool.query(`

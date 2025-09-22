@@ -16,13 +16,18 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ margin: 50, size: 'A4' });
-      const safeCustomerName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      
+      // Ensure customer_name and ID are valid
+      const customerName = customerDetails.customer_name || 'unknown_customer';
+      const safeCustomerName = customerName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      const id = data.order_id || data.quotation_id || `temp-${Date.now()}`;
+      
       const pdfDir = path.resolve(__dirname, '../pdf_data');
       if (!fs.existsSync(pdfDir)) {
         fs.mkdirSync(pdfDir, { recursive: true });
         fs.chmodSync(pdfDir, 0o770);
       }
-      const pdfPath = path.join(pdfDir, `${safeCustomerName}-${data.order_id || data.quotation_id}-${type}.pdf`);
+      const pdfPath = path.join(pdfDir, `${safeCustomerName}-${id}-${type}.pdf`);
       const stream = fs.createWriteStream(pdfPath, { flags: 'w', mode: 0o660 });
       doc.pipe(stream);
 
@@ -35,7 +40,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         .text('Email: madhunishacrackers@gmail.com', 50, 125);
 
       // Customer Details
-      const customerType = data.customer_type === 'Customer of Selected Agent' ? 'Customer - Agent' : data.customer_type || 'User';
+      const customerType = data.customer_type || 'User';
       let addressLine1 = customerDetails.address || 'N/A';
       let addressLine2 = '';
       if (addressLine1.length > 30) {
@@ -44,52 +49,73 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         addressLine1 = addressLine1.slice(0, splitIndex);
       }
 
-      let y = 80; // Starting Y-coordinate for customer details
-      const lineHeight = 15; // Standard line height for consistent spacing
+      let y = 80;
+      const lineHeight = 15;
+      let formattedDate = 'N/A';
+      if (customerDetails.created_at) {
+        try {
+          const date = customerDetails.created_at instanceof Date 
+            ? customerDetails.created_at 
+            : new Date(customerDetails.created_at);
+          if (!isNaN(date.getTime())) {
+            formattedDate = date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          } else {
+            console.warn(`generatePDF: Invalid date format for created_at: ${customerDetails.created_at}`);
+          }
+        } catch (err) {
+          console.error(`generatePDF: Error parsing created_at: ${err.message}`);
+        }
+      } else {
+        console.warn('generatePDF: created_at is undefined or null');
+      }
 
       doc.fontSize(12).font('Helvetica')
-        .text(`${type === 'quotation' ? 'Quotation ID' : 'Order ID'}: ${data.quotation_id || data.order_id}`, 280, y, { align: 'right' });
-      y += lineHeight;
-      doc.text(`Date: ${new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })}`, 280, y, { align: 'right' });
-      y += lineHeight;
-      doc.text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 280, y, { align: 'right' });
-      y += lineHeight;
-      doc.text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 280, y, { align: 'right' });
-      y += lineHeight;
-      doc.text(`Address: ${addressLine1}`, 280, y, { align: 'right' });
+        .text(`${type === 'quotation' ? 'Quotation ID' : 'Order ID'}: ${id}`, 280, y, { align: 'right' })
+        .text(`Date: ${formattedDate}`, 280, y + lineHeight, { align: 'right' })
+        .text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 280, y + 2 * lineHeight, { align: 'right' })
+        .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 280, y + 3 * lineHeight, { align: 'right' })
+        .text(`Address: ${addressLine1}`, 280, y + 4 * lineHeight, { align: 'right' });
+      y += 4 * lineHeight;
       if (addressLine2) {
+        doc.text(addressLine2, 280, y + lineHeight, { align: 'right' });
         y += lineHeight;
-        doc.text(addressLine2, 280, y, { align: 'right' });
       }
+      doc.text(`District: ${customerDetails.district || 'N/A'}`, 280, y + lineHeight, { align: 'right' });
       y += lineHeight;
-      doc.text(`District: ${customerDetails.district || 'N/A'}`, 280, y, { align: 'right' });
+      doc.text(`State: ${customerDetails.state || 'N/A'}`, 280, y + lineHeight, { align: 'right' });
       y += lineHeight;
-      doc.text(`State: ${customerDetails.state || 'N/A'}`, 280, y, { align: 'right' });
+      doc.text(`Customer Type: ${customerType}`, 280, y + lineHeight, { align: 'right' });
       y += lineHeight;
-      doc.text(`Customer Type: ${customerType}`, 280, y, { align: 'right' });
       if (data.agent_name) {
+        doc.text(`Agent: ${data.agent_name}`, 280, y + lineHeight, { align: 'right' });
         y += lineHeight;
-        doc.text(`Agent: ${data.agent_name}`, 280, y, { align: 'right' });
       }
 
-      // Table Setup
-      const tableY = y + 30;
+      // Calculate table starting position
+      const companyDetailsBottom = 125;
+      const customerDetailsBottom = y + lineHeight;
+      const tableY = Math.max(companyDetailsBottom, customerDetailsBottom) + 40;
       const tableWidth = 500;
       const colWidths = [30, 150, 50, 70, 70, 50, 100];
       const colX = [50, 80, 210, 250, 320, 400, 450];
       const rowHeight = 25;
       const pageHeight = doc.page.height - doc.page.margins.bottom;
 
-      // Initialize y
       let tableRowY = tableY;
 
-      // Split products into discounted and non-discounted
+      // Check if table header fits on the current page
+      if (tableRowY + 50 > pageHeight - 50) {
+        doc.addPage();
+        tableRowY = doc.page.margins.top;
+      }
+
       const discountedProducts = products.filter(p => parseFloat(p.discount || 0) > 0);
       const netRateProducts = products.filter(p => !p.discount || parseFloat(p.discount) === 0);
 
       // Primary Table (Discounted Products)
       if (discountedProducts.length > 0) {
-        doc.fontSize(12).font('Helvetica-Bold').text('DISCOUNTED PRODUCTS', 50, tableRowY - 20);
+        doc.fontSize(12).font('Helvetica-Bold').text('DISCOUNTED PRODUCTS', 50, tableRowY);
+        tableRowY += 20;
         doc.moveTo(50, tableRowY - 5).lineTo(50 + tableWidth, tableRowY - 5).stroke();
         doc.fontSize(10).font('Helvetica-Bold')
           .text('Sl.N', colX[0] + 5, tableRowY, { width: colWidths[0] - 10, align: 'center' })
@@ -111,8 +137,9 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         discountedProducts.forEach((product, index) => {
           if (tableRowY + rowHeight > pageHeight - 50) {
             doc.addPage();
-            tableRowY = doc.page.margins.top + 20;
-            doc.fontSize(12).font('Helvetica-Bold').text('DISCOUNTED PRODUCTS (Continued)', 50, tableRowY - 20);
+            tableRowY = doc.page.margins.top;
+            doc.fontSize(12).font('Helvetica-Bold').text('DISCOUNTED PRODUCTS (Continued)', 50, tableRowY);
+            tableRowY += 20;
             doc.moveTo(50, tableRowY - 5).lineTo(50 + tableWidth, tableRowY - 5).stroke();
             doc.fontSize(10).font('Helvetica-Bold')
               .text('Sl.N', colX[0] + 5, tableRowY, { width: colWidths[0] - 10, align: 'center' })
@@ -165,10 +192,10 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 
       // Secondary Table (Net Rate Products)
       if (netRateProducts.length > 0) {
-        tableRowY += 20;
-        if (tableRowY + rowHeight + 30 > pageHeight - 50) {
+        tableRowY += 30;
+        if (tableRowY + 50 > pageHeight - 50) {
           doc.addPage();
-          tableRowY = doc.page.margins.top + 20;
+          tableRowY = doc.page.margins.top;
         }
 
         doc.fontSize(12).font('Helvetica-Bold').text('NET RATE PRODUCTS', 50, tableRowY);
@@ -194,11 +221,12 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         netRateProducts.forEach((product, index) => {
           if (tableRowY + rowHeight > pageHeight - 50) {
             doc.addPage();
-            tableRowY = doc.page.margins.top + 20;
-            doc.fontSize(12).font('Helvetica-Bold').text('NET RATE PRODUCTS (Continued)', 50, tableRowY - 20);
+            tableRowY = doc.page.margins.top;
+            doc.fontSize(12).font('Helvetica-Bold').text('NET RATE PRODUCTS (Continued)', 50, tableRowY);
+            tableRowY += 20;
             doc.moveTo(50, tableRowY - 5).lineTo(50 + tableWidth, tableRowY - 5).stroke();
             doc.fontSize(10).font('Helvetica-Bold')
-              .text('Sl.No', colX[0] + 5, tableRowY, { width: colWidths[0] - 10, align: 'center' })
+              .text('Sl.N', colX[0] + 5, tableRowY, { width: colWidths[0] - 10, align: 'center' })
               .text('Product', colX[1] + 5, tableRowY, { width: colWidths[1] - 10, align: 'left' })
               .text('Qty', colX[2] + 5, tableRowY, { width: colWidths[2] - 10, align: 'center' })
               .text('Rate', colX[3] + 5, tableRowY, { width: colWidths[3] - 10, align: 'left' })
@@ -216,7 +244,8 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
           }
 
           const price = parseFloat(product.price) || 0;
-          const discRate = price; // No discount for net rate products
+          const discount = parseFloat(product.discount || 0) || 0;
+          const discRate = price - (price * discount / 100);
           const productTotal = discRate * (product.quantity || 1);
 
           let productName = product.productname || 'N/A';
@@ -245,63 +274,63 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         });
       }
 
-      // Handle case with no products
-      if (products.length === 0) {
-        tableRowY += 20;
-        doc.fontSize(12).font('Helvetica').text('No products available', 50, tableRowY, { align: 'center' });
-        tableRowY += 20;
-      }
-
       // Totals Section
-      tableRowY += 10;
-      if (tableRowY + 110 > pageHeight - 50) {
+      tableRowY += 30;
+      if (tableRowY + 120 > pageHeight - 50) {
         doc.addPage();
-        tableRowY = doc.page.margins.top + 20;
+        tableRowY = doc.page.margins.top;
       }
 
       const netRate = parseFloat(dbValues.net_rate) || 0;
       const youSave = parseFloat(dbValues.you_save) || 0;
-      const processingFee = parseFloat(dbValues.processing_fee) || ((netRate - youSave) * 0.03);
-      const total = parseFloat(dbValues.total) || (netRate - youSave + processingFee);
+      const additionalDiscount = parseFloat(dbValues.additional_discount) || 0;
+      const subtotal = netRate - youSave;
+      const additionalDiscountAmount = subtotal * (additionalDiscount / 100);
+      const discountedSubtotal = subtotal - additionalDiscountAmount;
+      const processingFee = parseFloat(dbValues.processing_fee) || (discountedSubtotal * 0.03);
+      const total = parseFloat(dbValues.total) || (discountedSubtotal + processingFee);
 
       doc.fontSize(10).font('Helvetica-Bold')
         .text(`Net Rate: Rs.${netRate.toFixed(2)}`, 350, tableRowY, { width: 150, align: 'right' });
       tableRowY += 20;
       doc.text(`Discount: Rs.${youSave.toFixed(2)}`, 350, tableRowY, { width: 150, align: 'right' });
+      if (additionalDiscount > 0) {
+        tableRowY += 20;
+        doc.text(`Extra Discount: Rs.${additionalDiscountAmount.toFixed(2)}`, 350, tableRowY, { width: 150, align: 'right' });
+      }
       tableRowY += 20;
       doc.text(`Processing Fee: Rs.${processingFee.toFixed(2)}`, 350, tableRowY, { width: 150, align: 'right' });
       tableRowY += 20;
       doc.text(`Total: Rs.${total.toFixed(2)}`, 350, tableRowY, { width: 150, align: 'right' });
 
       // Footer
-      tableRowY += 30;
       if (tableRowY + 50 > pageHeight - 50) {
         doc.addPage();
-        tableRowY = doc.page.margins.top + 20;
+        tableRowY = doc.page.margins.top;
       }
       doc.fontSize(10).font('Helvetica')
-        .text('Thank you for your business!', 50, tableRowY, { align: 'center' })
-        .text('For any queries, contact us at +91 94875 24689', 50, tableRowY + 15, { align: 'center' });
+        .text('Thank you for your business!', 50, tableRowY + 30, { align: 'center' })
+        .text('Madhu Nisha Crackers, Sivakasi', 50, tableRowY + 45, { align: 'center' });
 
       doc.end();
+
       stream.on('finish', () => {
         if (!fs.existsSync(pdfPath)) {
-          reject(new Error(`PDF file not created at ${pdfPath}`));
+          console.error(`PDF file not found at ${pdfPath} for ${type}_id ${id}`);
+          reject(new Error(`PDF file not found at ${pdfPath} for ${type}_id ${id}`));
           return;
         }
-        fs.access(pdfPath, fs.constants.R_OK, (err) => {
-          if (err) {
-            reject(new Error(`PDF file at ${pdfPath} is not readable: ${err.message}`));
-            return;
-          }
-          resolve({ pdfPath, calculatedTotal: total });
-        });
+        console.log(`PDF generated at: ${pdfPath} for ${type}_id: ${id}`);
+        resolve({ pdfPath }); // Ensure consistent return format
       });
+
       stream.on('error', (err) => {
-        reject(new Error(`Stream error while creating PDF at ${pdfPath}: ${err.message}`));
+        console.error(`Stream error for ${type}_id ${id}: ${err.message}`);
+        reject(new Error(`Stream error: ${err.message}`));
       });
     } catch (err) {
-      reject(new Error(`Error generating PDF: ${err.message}`));
+      console.error(`PDF generation failed for ${type}_id ${data.order_id || data.quotation_id}: ${err.message}`);
+      reject(new Error(`PDF generation failed: ${err.message}`));
     }
   });
 };
@@ -566,174 +595,90 @@ exports.createQuotation = async (req, res) => {
 };
 
 exports.updateQuotation = async (req, res) => {
+  const { quotation_id } = req.params;
+  const {
+    customer_id,
+    products,
+    net_rate,
+    you_save,
+    processing_fee,
+    total,
+    promo_discount,
+    additional_discount,
+    status,
+  } = req.body;
+
   try {
-    const { quotation_id } = req.params;
-    const { products, net_rate, you_save, total, promo_discount, additional_discount, status } = req.body;
-
-    if (!quotation_id || !/^[a-zA-Z0-9-_]+$/.test(quotation_id)) 
-      return res.status(400).json({ message: 'Invalid or missing Quotation ID', quotation_id });
-    if (products && (!Array.isArray(products) || products.length === 0)) 
-      return res.status(400).json({ message: 'Products array is required and must not be empty', quotation_id });
-    if (total && (isNaN(parseFloat(total)) || parseFloat(total) <= 0)) 
-      return res.status(400).json({ message: 'Total must be a positive number', quotation_id });
-    if (status && !['pending', 'booked', 'canceled'].includes(status)) 
-      return res.status(400).json({ message: 'Invalid status', quotation_id });
-
-    const parsedNetRate = net_rate !== undefined ? parseFloat(net_rate) : undefined;
-    const parsedYouSave = you_save !== undefined ? parseFloat(you_save) : undefined;
-    const parsedPromoDiscount = promo_discount !== undefined ? parseFloat(promo_discount) : undefined;
-    const parsedAdditionalDiscount = additional_discount !== undefined ? parseFloat(additional_discount) : undefined;
-    const parsedTotal = total !== undefined ? parseFloat(total) : undefined;
-
-    if ([parsedNetRate, parsedYouSave, parsedPromoDiscount, parsedAdditionalDiscount, parsedTotal].some(v => v !== undefined && isNaN(v)))
-      return res.status(400).json({ message: 'net_rate, you_save, total, promo_discount, and additional_discount must be valid numbers', quotation_id });
-
-    const quotationCheck = await pool.query(
-      'SELECT * FROM public.quotations WHERE quotation_id = $1',
-      [quotation_id]
-    );
-    if (quotationCheck.rows.length === 0) 
-      return res.status(404).json({ message: 'Quotation not found', quotation_id });
-
-    const quotation = quotationCheck.rows[0];
-    let customerDetails = {
-      customer_name: quotation.customer_name,
-      address: quotation.address,
-      mobile_number: quotation.mobile_number,
-      email: quotation.email,
-      district: quotation.district,
-      state: quotation.state
-    };
-    let agent_name = null;
-
-    if (quotation.customer_id) {
-      const customerCheck = await pool.query(
-        'SELECT customer_name, address, mobile_number, email, district, state, customer_type, agent_id FROM public.customers WHERE id = $1',
-        [quotation.customer_id]
-      );
-      if (customerCheck.rows.length > 0) {
-        customerDetails = customerCheck.rows[0];
-        if (customerDetails.customer_type === 'Customer of Selected Agent' && customerDetails.agent_id) {
-          const agentCheck = await pool.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerDetails.agent_id]);
-          if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
-        }
-      }
+    // Validate inputs
+    if (!quotation_id || !customer_id || !products || !Array.isArray(products)) {
+      return res.status(400).json({ message: 'Invalid quotation data' });
     }
 
-    let enhancedProducts = quotation.products;
-    if (products) {
-      enhancedProducts = [];
-      for (const product of products) {
-        const { id, product_type, quantity, price, discount, productname, per } = product;
-        if (!id || !product_type || !productname || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
-          return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)', quotation_id });
+    // Fetch customer details
+    const customerQuery = await pool.query('SELECT * FROM customers WHERE id = $1', [customer_id]);
+    if (customerQuery.rows.length === 0) {
+      return res.status(404).json({ message: 'Customer not found' });
+    }
+    const customerDetails = customerQuery.rows[0];
 
-        let productPer = per || 'Unit';
-        if (product_type.toLowerCase() !== 'custom') {
-          const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-          if (productCheck.rows.length === 0)
-            return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, quotation_id });
-          productPer = productCheck.rows[0].per || productPer;
-        }
-        enhancedProducts.push({ ...product, per: productPer });
-      }
-    }
-
-    let pdfPath = quotation.pdf;
-    if (products || parsedTotal !== undefined) {
-      const pdfResult = await generatePDF(
-        'quotation',
-        { quotation_id, customer_type: quotation.customer_type, total: parsedTotal || parseFloat(quotation.total || 0), agent_name },
-        customerDetails,
-        enhancedProducts,
-        {
-          net_rate: parsedNetRate !== undefined ? parsedNetRate : parseFloat(quotation.net_rate || 0),
-          you_save: parsedYouSave !== undefined ? parsedYouSave : parseFloat(quotation.you_save || 0),
-          total: parsedTotal !== undefined ? parsedTotal : parseFloat(quotation.total || 0),
-          promo_discount: parsedPromoDiscount !== undefined ? parsedPromoDiscount : parseFloat(quotation.promo_discount || 0),
-          additional_discount: parsedAdditionalDiscount !== undefined ? parsedAdditionalDiscount : parseFloat(quotation.additional_discount || 0)
-        }
-      );
-      pdfPath = pdfResult.pdfPath;
-      console.log(`PDF regenerated at: ${pdfPath} for quotation_id: ${quotation_id}`);
-    }
-
-    const updateFields = [];
-    const updateValues = [];
-    let paramIndex = 1;
-
-    if (products) {
-      updateFields.push(`products = $${paramIndex++}`);
-      updateValues.push(JSON.stringify(enhancedProducts));
-    }
-    if (parsedNetRate !== undefined) {
-      updateFields.push(`net_rate = $${paramIndex++}`);
-      updateValues.push(parsedNetRate);
-    }
-    if (parsedYouSave !== undefined) {
-      updateFields.push(`you_save = $${paramIndex++}`);
-      updateValues.push(parsedYouSave);
-    }
-    if (parsedTotal !== undefined) {
-      updateFields.push(`total = $${paramIndex++}`);
-      updateValues.push(parsedTotal);
-    }
-    if (parsedPromoDiscount !== undefined) {
-      updateFields.push(`promo_discount = $${paramIndex++}`);
-      updateValues.push(parsedPromoDiscount);
-    }
-    if (parsedAdditionalDiscount !== undefined) {
-      updateFields.push(`additional_discount = $${paramIndex++}`);
-      updateValues.push(parsedAdditionalDiscount);
-    }
-    if (pdfPath) {
-      updateFields.push(`pdf = $${paramIndex++}`);
-      updateValues.push(pdfPath);
-    }
-    if (status) {
-      updateFields.push(`status = $${paramIndex++}`);
-      updateValues.push(status);
-    }
-    updateFields.push(`updated_at = NOW()`);
-
-    if (updateFields.length === 1) {
-      return res.status(400).json({ message: 'No fields to update', quotation_id });
-    }
-
+    // Update quotation in database
     const query = `
-      UPDATE public.quotations 
-      SET ${updateFields.join(', ')}
-      WHERE quotation_id = $${paramIndex}
-      RETURNING id, quotation_id, status
+      UPDATE quotations
+      SET customer_id = $1, products = $2, net_rate = $3, you_save = $4, processing_fee = $5, total = $6,
+          promo_discount = $7, additional_discount = $8, status = $9, updated_at = NOW()
+      WHERE quotation_id = $10
+      RETURNING *;
     `;
-    updateValues.push(quotation_id);
+    const values = [
+      customer_id,
+      JSON.stringify(products),
+      net_rate,
+      you_save,
+      processing_fee,
+      total,
+      promo_discount || 0,
+      additional_discount || 0,
+      status || 'pending',
+      quotation_id,
+    ];
+    const result = await pool.query(query, values);
 
-    const result = await pool.query(query, updateValues);
-
-    if (!fs.existsSync(pdfPath)) {
-      console.error(`Failed: PDF file not found at ${pdfPath} for quotation_id ${quotation_id}`);
-      return res.status(500).json({ message: 'PDF file not found after update', error: 'File system error', quotation_id });
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Quotation not found' });
     }
-    fs.access(pdfPath, fs.constants.R_OK, (err) => {
-      if (err) {
-        console.error(`Failed: Cannot read PDF file at ${pdfPath} for quotation_id ${quotation_id}: ${err.message}`);
-        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message, quotation_id });
+
+    const updatedQuotation = result.rows[0];
+
+    // Generate PDF
+    const pdfPath = await generatePDF(
+      'quotation',
+      { quotation_id, customer_type: customerDetails.customer_type },
+      customerDetails,
+      products,
+      {
+        net_rate,
+        you_save,
+        processing_fee,
+        total,
+        additional_discount,
       }
-      const safeCustomerName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${quotation_id}-quotation.pdf`);
-      const readStream = fs.createReadStream(pdfPath);
-      readStream.on('error', (streamErr) => {
-        console.error(`Failed: Failed to stream PDF for quotation_id ${quotation_id}: ${streamErr.message}`);
-        res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message, quotation_id });
-      });
-      readStream.pipe(res);
-      console.log(`PDF streaming initiated for quotation_id: ${quotation_id}`);
+    );
+
+    // Send response with updated quotation and PDF path
+    res.json({
+      quotation_id,
+      message: 'Quotation updated successfully',
+    });
+
+    // Optionally, send the PDF file
+    res.sendFile(pdfPath, (err) => {
+      if (err) {
+        console.error(`Failed to send PDF for quotation_id ${quotation_id}: ${err.message}`);
+      }
     });
   } catch (err) {
-    console.error(`Failed: Failed to update quotation for quotation_id ${req.params.quotation_id}: ${err.message}`);
-    res.status(500).json({ message: 'Failed to update quotation', error: err.message, quotation_id: req.params.quotation_id });
+    console.error(`Error updating quotation ${quotation_id}: ${err.message}`);
+    res.status(500).json({ message: `Failed to update quotation: ${err.message}` });
   }
 };
 
@@ -1229,86 +1174,118 @@ exports.getInvoice = async (req, res) => {
     return res.status(400).json({ message: 'Invalid or missing order_id', received_order_id: order_id });
   }
 
-    try {
-      const result = await pool.query(
-        'SELECT pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status FROM public.bookings WHERE order_id = $1',
-        [order_id]
-      );
-      if (result.rows.length === 0) {
-        console.error(`Failed: No booking found for order_id: ${order_id}`);
-        return res.status(404).json({ message: 'Booking not found', order_id });
-      }
-
-      const { pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status } = result.rows[0];
-      let pdfPath = pdf;
-      let agent_name = null;
-
-      if (customer_type === 'Customer of Selected Agent' && customer_id) {
-        const customerCheck = await pool.query('SELECT agent_id FROM public.customers WHERE id = $1', [customer_id]);
-        if (customerCheck.rows.length > 0 && customerCheck.rows[0].agent_id) {
-          const agentCheck = await pool.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerCheck.rows[0].agent_id]);
-          if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
-        }
-      }
-
-      if (!fs.existsSync(pdfPath)) {
-        console.log(`PDF not found at ${pdfPath}, regenerating for order_id: ${order_id}`);
-        let parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
-        let enhancedProducts = [];
-        for (const p of parsedProducts) {
-          if (!p.per) {
-            const tableName = p.product_type.toLowerCase().replace(/\s+/g, '_');
-            const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
-            const per = productCheck.rows[0]?.per || 'Unit';
-            enhancedProducts.push({ ...p, per });
-          } else {
-            enhancedProducts.push(p);
-          }
-        }
-        const pdfResult = await generatePDF(
-          'invoice',
-          { order_id, customer_type, total: parseFloat(total || 0), agent_name },
-          { customer_name, address, mobile_number, email, district, state },
-          enhancedProducts,
-          { 
-            net_rate: parseFloat(net_rate || 0), 
-            you_save: parseFloat(you_save || 0), 
-            total: parseFloat(total || 0), 
-            promo_discount: parseFloat(promo_discount || 0),
-            additional_discount: parseFloat(additional_discount || 0)
-          }
-        );
-        pdfPath = pdfResult.pdfPath;
-        console.log(`PDF regenerated at: ${pdfPath} for order_id: ${order_id}`);
-
-        await pool.query(
-          'UPDATE public.bookings SET pdf = $1 WHERE order_id = $2',
-          [pdfPath, order_id]
-        );
-      }
-
-      fs.access(pdfPath, fs.constants.R_OK, (err) => {
-        if (err) {
-          console.error(`Failed: Cannot read PDF file at ${pdfPath} for order_id ${order_id}: ${err.message}`);
-          return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message, order_id });
-        }
-        const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
-        const readStream = fs.createReadStream(pdfPath);
-        readStream.on('error', (streamErr) => {
-          console.error(`Failed: Failed to stream PDF for order_id ${order_id}: ${streamErr.message}`);
-          if (!res.headersSent) {
-            res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message, order_id });
-          }
-        });
-        readStream.pipe(res);
-        console.log(`PDF streaming initiated for order_id: ${order_id}`);
-      });
-    } catch (err) {
-      console.error(`Failed: Failed to fetch invoice for order_id ${order_id}: ${err.message}`);
-      res.status(500).json({ message: 'Failed to fetch invoice', error: err.message, order_id });
+  let client;
+  try {
+    client = await pool.connect();
+    const result = await client.query(
+      'SELECT pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status, created_at FROM public.bookings WHERE order_id = $1',
+      [order_id]
+    );
+    if (result.rows.length === 0) {
+      console.error(`Failed: No booking found for order_id: ${order_id}`);
+      return res.status(404).json({ message: 'Booking not found', order_id });
     }
+
+    const { pdf, products, net_rate, you_save, total, promo_discount, additional_discount, customer_name, address, mobile_number, email, district, state, customer_type, customer_id, status, created_at } = result.rows[0];
+    console.log(`getInvoice: Fetched created_at: ${created_at}`);
+
+    let pdfPath = pdf;
+    let agent_name = null;
+
+    if (customer_type === 'Customer of Selected Agent' && customer_id) {
+      const customerCheck = await client.query('SELECT agent_id FROM public.customers WHERE id = $1', [customer_id]);
+      if (customerCheck.rows.length > 0 && customerCheck.rows[0].agent_id) {
+        const agentCheck = await client.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerCheck.rows[0].agent_id]);
+        if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
+      }
+    }
+
+    // Validate products
+    let parsedProducts;
+    try {
+      parsedProducts = typeof products === 'string' ? JSON.parse(products) : products;
+      if (!Array.isArray(parsedProducts) || parsedProducts.length === 0) {
+        throw new Error('Products is not a valid array');
+      }
+    } catch (err) {
+      console.error(`Failed: Invalid products data for order_id ${order_id}: ${err.message}`);
+      return res.status(500).json({ message: 'Invalid products data', error: err.message, order_id });
+    }
+
+    // Force PDF regeneration for testing
+    console.log(`Forcing PDF regeneration for order_id: ${order_id}`);
+    let enhancedProducts = [];
+    for (const p of parsedProducts) {
+      if (!p.per) {
+        const tableName = p.product_type?.toLowerCase().replace(/\s+/g, '_');
+        if (!tableName) {
+          console.error(`Failed: Invalid product_type for product ${p.id} in order_id ${order_id}`);
+          return res.status(500).json({ message: 'Invalid product_type in products', order_id });
+        }
+        const productCheck = await client.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
+        const per = productCheck.rows[0]?.per || 'Unit';
+        enhancedProducts.push({ ...p, per });
+      } else {
+        enhancedProducts.push(p);
+      }
+    }
+
+    let pdfResult;
+    try {
+      pdfResult = await generatePDF(
+        'invoice',
+        { order_id, customer_type, total: parseFloat(total || 0), agent_name },
+        { customer_name, address, mobile_number, email, district, state, created_at: created_at instanceof Date ? created_at.toISOString() : created_at },
+        enhancedProducts,
+        { 
+          net_rate: parseFloat(net_rate || 0), 
+          you_save: parseFloat(you_save || 0), 
+          total: parseFloat(total || 0), 
+          promo_discount: parseFloat(promo_discount || 0),
+          additional_discount: parseFloat(additional_discount || 0)
+        }
+      );
+      pdfPath = pdfResult.pdfPath;
+      console.log(`PDF regenerated at: ${pdfPath} for order_id: ${order_id}`);
+    } catch (pdfError) {
+      console.error(`Failed: PDF generation failed for order_id ${order_id}: ${pdfError.message}`);
+      return res.status(500).json({ message: 'Failed to generate PDF', error: pdfError.message, order_id });
+    }
+
+    if (!pdfPath) {
+      console.error(`Failed: pdfPath is undefined after generation for order_id ${order_id}`);
+      return res.status(500).json({ message: 'PDF path is undefined after generation', order_id });
+    }
+
+    await client.query(
+      'UPDATE public.bookings SET pdf = $1 WHERE order_id = $2',
+      [pdfPath, order_id]
+    );
+
+    fs.access(pdfPath, fs.constants.R_OK, (err) => {
+      if (err) {
+        console.error(`Failed: Cannot read PDF file at ${pdfPath} for order_id ${order_id}: ${err.message}`);
+        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message, order_id });
+      }
+      const safeCustomerName = (customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
+      const readStream = fs.createReadStream(pdfPath);
+      readStream.on('error', (streamErr) => {
+        console.error(`Failed: Failed to stream PDF for order_id ${order_id}: ${streamErr.message}`);
+        if (!res.headersSent) {
+          res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message, order_id });
+        }
+      });
+      readStream.pipe(res);
+      console.log(`PDF streaming initiated for order_id: ${order_id}`);
+    });
+  } catch (err) {
+    console.error(`Failed: Failed to fetch invoice for order_id ${order_id}: ${err.message}`);
+    return res.status(500).json({ message: 'Failed to fetch invoice', error: err.message, order_id });
+  } finally {
+    if (client) client.release();
+  }
 };
 
 exports.searchBookings = async (req, res) => {
