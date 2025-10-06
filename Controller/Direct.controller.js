@@ -338,14 +338,16 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 exports.getCustomers = async (req, res) => {
   try {
     const query = `
-      SELECT id, customer_name AS name, address, mobile_number, email, customer_type, district, state, agent_id
-      FROM public.customers
+      SELECT c.id, c.customer_name AS name, c.address, c.mobile_number, c.email, c.customer_type, c.district, c.state, c.agent_id,
+             a.customer_name AS agent_name
+      FROM public.customers c
+      LEFT JOIN public.customers a ON c.agent_id::bigint = a.id AND c.customer_type = 'Customer of Selected Agent'
     `;
     const result = await pool.query(query);
     res.status(200).json(result.rows);
   } catch (err) {
-    console.error('Failed to fetch customers:', err.message);
-    res.status(500).json({ message: 'Failed to fetch customers', error: err.message });
+    console.error('Failed to fetch customers:', err.stack);
+    res.status(500).json({ error: 'Failed to fetch customers', details: err.message });
   }
 };
 
@@ -597,15 +599,7 @@ exports.createQuotation = async (req, res) => {
 exports.updateQuotation = async (req, res) => {
   const { quotation_id } = req.params;
   const {
-    customer_id,
-    products,
-    net_rate,
-    you_save,
-    processing_fee,
-    total,
-    promo_discount,
-    additional_discount,
-    status,
+    customer_id, products, net_rate, you_save, processing_fee, total, promo_discount, additional_discount, status
   } = req.body;
 
   try {
@@ -621,34 +615,6 @@ exports.updateQuotation = async (req, res) => {
     }
     const customerDetails = customerQuery.rows[0];
 
-    // Update quotation in database
-    const query = `
-      UPDATE quotations
-      SET customer_id = $1, products = $2, net_rate = $3, you_save = $4, processing_fee = $5, total = $6,
-          promo_discount = $7, additional_discount = $8, status = $9, updated_at = NOW()
-      WHERE quotation_id = $10
-      RETURNING *;
-    `;
-    const values = [
-      customer_id,
-      JSON.stringify(products),
-      net_rate,
-      you_save,
-      processing_fee,
-      total,
-      promo_discount || 0,
-      additional_discount || 0,
-      status || 'pending',
-      quotation_id,
-    ];
-    const result = await pool.query(query, values);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Quotation not found' });
-    }
-
-    const updatedQuotation = result.rows[0];
-
     // Generate PDF
     const pdfPath = await generatePDF(
       'quotation',
@@ -662,19 +628,49 @@ exports.updateQuotation = async (req, res) => {
         total,
         additional_discount,
       }
-    );
+    ).pdfPath;
 
-    // Send response with updated quotation and PDF path
+    // Update quotation in database, including customer details and PDF path
+    const query = `
+      UPDATE quotations
+      SET customer_id = $1, products = $2, net_rate = $3, you_save = $4, processing_fee = $5, total = $6,
+          promo_discount = $7, additional_discount = $8, status = $9,
+          customer_name = $10, address = $11, mobile_number = $12, email = $13,
+          district = $14, state = $15, customer_type = $16, pdf = $17,
+          updated_at = NOW()
+      WHERE quotation_id = $18
+      RETURNING *;
+    `;
+    const values = [
+      customer_id,
+      JSON.stringify(products),
+      net_rate,
+      you_save,
+      processing_fee,
+      total,
+      promo_discount || 0,
+      additional_discount || 0,
+      status || 'pending',
+      customerDetails.customer_name || null,
+      customerDetails.address || null,
+      customerDetails.mobile_number || null,
+      customerDetails.email || null,
+      customerDetails.district || null,
+      customerDetails.state || null,
+      customerDetails.customer_type || 'User',
+      pdfPath,
+      quotation_id,
+    ];
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Quotation not found' });
+    }
+
+    // Send JSON response
     res.json({
       quotation_id,
       message: 'Quotation updated successfully',
-    });
-
-    // Optionally, send the PDF file
-    res.sendFile(pdfPath, (err) => {
-      if (err) {
-        console.error(`Failed to send PDF for quotation_id ${quotation_id}: ${err.message}`);
-      }
     });
   } catch (err) {
     console.error(`Error updating quotation ${quotation_id}: ${err.message}`);
