@@ -287,7 +287,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       const subtotal = netRate - youSave;
       const additionalDiscountAmount = subtotal * (additionalDiscount / 100);
       const discountedSubtotal = subtotal - additionalDiscountAmount;
-      const processingFee = parseFloat(dbValues.processing_fee) || (discountedSubtotal * 0.03);
+      const processingFee = parseFloat(dbValues.processing_fee) || (discountedSubtotal * 0.01 );
       const total = parseFloat(dbValues.total) || (discountedSubtotal + processingFee);
 
       doc.fontSize(10).font('Helvetica-Bold')
