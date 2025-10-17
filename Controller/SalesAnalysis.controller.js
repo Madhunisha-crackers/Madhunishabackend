@@ -32,13 +32,6 @@ exports.getSalesAnalysis = async (req, res) => {
       FROM public.bookings b
       CROSS JOIN LATERAL jsonb_array_elements(b.products::jsonb) AS p(product)
       WHERE LOWER(b.status) IN ('booked', 'paid', 'dispatched', 'packed', 'delivered')
-      UNION ALL
-      SELECT 
-        p.product->>'productname' AS productname,
-        COALESCE((p.product->>'quantity')::integer, 0) AS quantity
-      FROM public.quotations q
-      CROSS JOIN LATERAL jsonb_array_elements(q.products::jsonb) AS p(product)
-      WHERE LOWER(q.status) IN ('booked', 'pending')
     `);
 
     const productSummary = products.rows.reduce((acc, row) => {
