@@ -240,7 +240,10 @@ exports.getProducts = async (req, res) => {
     const offset = (page - 1) * limit;
     const productTypes = await getCachedProductTypes();
 
-    const productQueries = productTypes.map(async (productType) => {
+    // Deduplicate product types
+    const uniqueProductTypes = [...new Set(productTypes)];
+
+    const productQueries = uniqueProductTypes.map(async (productType) => {
       const tableName = productType.toLowerCase().replace(/\s+/g, "_");
       const client = await pool.connect();
       try {
@@ -273,11 +276,21 @@ exports.getProducts = async (req, res) => {
     });
 
     const allProducts = (await Promise.all(productQueries)).flat();
+
+    // Optional: Further deduplicate by unique key (e.g., id + product_type)
+    const seen = new Set();
+    const uniqueProducts = allProducts.filter(product => {
+      const key = `${product.product_type}-${product.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
     res.status(200).json({
-      data: allProducts,
+      data: uniqueProducts,
       page: Number.parseInt(page),
       limit: Number.parseInt(limit),
-      total: allProducts.length,
+      total: uniqueProducts.length,
     });
   } catch (err) {
     console.error("Error in getProducts:", err);
