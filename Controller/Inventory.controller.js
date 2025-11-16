@@ -315,7 +315,7 @@ exports.addProductType = async (req, res) => {
         image TEXT,
         description TEXT,
         status VARCHAR(10) NOT NULL DEFAULT 'off' CHECK (status IN ('on', 'off')),
-        fast_running BOOLEAN DEFAULT false,
+        fast_running BOOLEAN DEFAULT false
       )
     `);
 
