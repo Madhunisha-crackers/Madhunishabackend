@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
+const XLSX = require('xlsx');
 
 const pool = new Pool({
   user: process.env.PGUSER,
@@ -15,13 +16,12 @@ const pool = new Pool({
 const generatePDF = (type, data, customerDetails, products, dbValues) => {
   return new Promise((resolve, reject) => {
     try {
-      const doc = new PDFDocument({ margin: 50, size: 'A4' });
-      
-      // Ensure customer_name and ID are valid
+      const doc = new PDFDocument({ margin: 0, size: 'A4', autoFirstPage: true });
+
       const customerName = customerDetails.customer_name || 'unknown_customer';
       const safeCustomerName = customerName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
       const id = data.order_id || data.quotation_id || `temp-${Date.now()}`;
-      
+
       const pdfDir = path.resolve(__dirname, '../pdf_data');
       if (!fs.existsSync(pdfDir)) {
         fs.mkdirSync(pdfDir, { recursive: true });
@@ -31,305 +31,372 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       const stream = fs.createWriteStream(pdfPath, { flags: 'w', mode: 0o660 });
       doc.pipe(stream);
 
-      // Header
-      doc.fontSize(20).font('Helvetica-Bold').text(type === 'quotation' ? 'Quotation' : 'Estimate Bill', 50, 50, { align: 'center' });
-      doc.fontSize(12).font('Helvetica')
-        .text('Madhu Nisha Crackers', 50, 80)
-        .text('Sivakasi', 50, 95)
-        .text('Mobile: +91 94875 24689', 50, 110)
-        .text('Email: madhunishacrackers@gmail.com', 50, 125);
+      // ── Colour palette (print-friendly — mostly black/grey, no fills) ──
+      const C = {
+        black:       '#000000',
+        dark:        '#1C1917',
+        mid:         '#44403C',
+        light:       '#78716C',
+        faint:       '#D6D3D1',
+        green:       '#15803D',
+        white:       '#FFFFFF',
+        accent:      '#EA580C',  // used ONLY for company name text + footer underline
+      };
 
-      // Customer Details
-      const customerType = data.customer_type || 'User';
-      let addressLine1 = customerDetails.address || 'N/A';
-      let addressLine2 = '';
-      if (addressLine1.length > 30) {
-        const splitIndex = addressLine1.lastIndexOf(' ', 30);
-        addressLine2 = addressLine1.slice(splitIndex + 1);
-        addressLine1 = addressLine1.slice(0, splitIndex);
-      }
+      const pageW    = doc.page.width;
+      const pageH    = doc.page.height;
+      const marginL  = 45;
+      const marginR  = 45;
+      const contentW = pageW - marginL - marginR;
+      const footerH  = 28;
+      const usableH  = pageH - footerH - 10;
 
-      let y = 80;
-      const lineHeight = 15;
+      // ── Footer — plain text + one thin underline accent ─────────────
+      const drawPageFooter = (pNum) => {
+        const fY = pageH - footerH;
+        // Single thin orange underline at top of footer area
+        doc.strokeColor(C.accent).lineWidth(1)
+          .moveTo(marginL, fY).lineTo(marginL + contentW, fY).stroke();
+        doc.fillColor(C.mid).font('Helvetica').fontSize(7.5)
+          .text('Thank you for your business with Madhu Nisha Crackers, Sivakasi',
+            marginL, fY + 8, { width: contentW - 40, align: 'left' });
+        doc.fillColor(C.light).font('Helvetica-Bold').fontSize(8)
+          .text(`Page ${pNum}`, marginL, fY + 8, { width: contentW, align: 'right' });
+      };
+
+      // ── Header — text only, no background fill ──────────────────────
+      const drawPageHeader = () => {
+        // Thick bottom border under header area
+        doc.strokeColor(C.faint).lineWidth(1)
+          .moveTo(marginL, 68).lineTo(marginL + contentW, 68).stroke();
+        doc.fillColor(C.accent).font('Helvetica-Bold').fontSize(22)
+          .text('MADHU NISHA CRACKERS', marginL, 14, { width: contentW, align: 'center' });
+        doc.fillColor(C.mid).font('Times-Italic').fontSize(8.5)
+          .text("SIVAKASI'S FINEST FIREWORKS", marginL, 40, { width: contentW, align: 'center' });
+        doc.fillColor(C.light).fontSize(7.5)
+          .text('www.madhunishacrackers.com   |   +91 94875 24689   |   madhunishacrackers@gmail.com',
+            marginL, 52, { width: contentW, align: 'center' });
+      };
+
+      // ── Table columns ───────────────────────────────────────────────
+      // colW sums: 25+150+55+65+68+38+104 = 505 = contentW (595-45-45) ✓
+      const colX    = [marginL, marginL+25, marginL+175, marginL+230, marginL+295, marginL+363, marginL+401];
+      const colW    = [25, 150, 55, 65, 68, 38, 104];
+      const headers = ['Sl.N', 'Product Name', 'Qty', 'Rate (Rs.)', 'Disc. Rate', 'Per', 'Total'];
+      const rowH    = 20;
+
+      const drawTableHeader = (y) => {
+        // Bottom border under header row instead of filled background
+        doc.strokeColor(C.dark).lineWidth(0.8)
+          .moveTo(marginL, y).lineTo(marginL + contentW, y).stroke()
+          .moveTo(marginL, y + 18).lineTo(marginL + contentW, y + 18).stroke();
+        headers.forEach((h, i) => {
+          doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(8)
+            .text(h, colX[i] + 3, y + 5, {
+              width: colW[i] - 6,
+              align: i === 0 || i === 2 || i === 5 ? 'center' : i >= 3 ? 'right' : 'left',
+            });
+        });
+        // Vertical dividers in header
+        colX.forEach((x, i) => {
+          if (i > 0) {
+            doc.strokeColor(C.faint).lineWidth(0.4)
+              .moveTo(x, y).lineTo(x, y + 18).stroke();
+          }
+        });
+        return y + 18;
+      };
+
+      const drawSectionLabel = (y, label) => {
+        // Just bold underlined text — no background
+        doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(8.5)
+          .text(label, marginL, y + 3, { width: contentW });
+        doc.strokeColor(C.faint).lineWidth(0.5)
+          .moveTo(marginL, y + 15).lineTo(marginL + contentW, y + 15).stroke();
+        return y + 16;
+      };
+
+      const drawRowLines = (rowY) => {
+        doc.strokeColor(C.faint).lineWidth(0.3)
+          .moveTo(marginL, rowY + rowH - 1).lineTo(marginL + contentW, rowY + rowH - 1).stroke();
+        colX.forEach((x, i) => {
+          if (i > 0) doc.moveTo(x, rowY).lineTo(x, rowY + rowH).stroke();
+        });
+      };
+
+      // ── State ───────────────────────────────────────────────────────
+      let pageNum  = 1;
+      let curY     = 0;
+      let rowIndex = 0;
+
+      const ensureSpace = (needed) => {
+        if (curY + needed > usableH) {
+          drawPageFooter(pageNum);
+          doc.addPage();
+          pageNum++;
+          drawPageHeader();
+          curY     = 76;
+          curY     = drawTableHeader(curY);
+          rowIndex = 0;
+        }
+      };
+
+      // ────────────────────────────────────────────────────────────────
+      // PAGE 1 CONTENT
+      // ────────────────────────────────────────────────────────────────
+      drawPageHeader();
+
+      // Bill type label — bold text + underline, no background
+      const isQuotation = type === 'quotation';
+      doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(11)
+        .text(isQuotation ? 'QUOTATION' : 'ESTIMATE', marginL, 78, { width: contentW });
+      doc.strokeColor(C.faint).lineWidth(0.5)
+        .moveTo(marginL, 91).lineTo(marginL + contentW, 91).stroke();
+
+      // Date
       let formattedDate = 'N/A';
       if (customerDetails.created_at) {
         try {
-          const date = customerDetails.created_at instanceof Date 
-            ? customerDetails.created_at 
-            : new Date(customerDetails.created_at);
-          if (!isNaN(date.getTime())) {
-            formattedDate = date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
-          } else {
-            console.warn(`generatePDF: Invalid date format for created_at: ${customerDetails.created_at}`);
-          }
-        } catch (err) {
-          console.error(`generatePDF: Error parsing created_at: ${err.message}`);
-        }
-      } else {
-        console.warn('generatePDF: created_at is undefined or null');
+          const d = customerDetails.created_at instanceof Date
+            ? customerDetails.created_at : new Date(customerDetails.created_at);
+          if (!isNaN(d.getTime()))
+            formattedDate = d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        } catch (e) { /* ignore */ }
       }
 
-      doc.fontSize(12).font('Helvetica')
-        .text(`${type === 'quotation' ? 'Quotation ID' : 'Order ID'}: ${id}`, 280, y, { align: 'right' })
-        .text(`Date: ${formattedDate}`, 280, y + lineHeight, { align: 'right' })
-        .text(`Customer: ${customerDetails.customer_name || 'N/A'}`, 280, y + 2 * lineHeight, { align: 'right' })
-        .text(`Contact: ${customerDetails.mobile_number || 'N/A'}`, 280, y + 3 * lineHeight, { align: 'right' })
-        .text(`Address: ${addressLine1}`, 280, y + 4 * lineHeight, { align: 'right' });
-      y += 4 * lineHeight;
-      if (addressLine2) {
-        doc.text(addressLine2, 280, y + lineHeight, { align: 'right' });
-        y += lineHeight;
-      }
-      doc.text(`District: ${customerDetails.district || 'N/A'}`, 280, y + lineHeight, { align: 'right' });
-      y += lineHeight;
-      doc.text(`State: ${customerDetails.state || 'N/A'}`, 280, y + lineHeight, { align: 'right' });
-      y += lineHeight;
-      doc.text(`Customer Type: ${customerType}`, 280, y + lineHeight, { align: 'right' });
-      y += lineHeight;
+      // ── FROM / BILL TO — two columns, bordered boxes, no fill ───────
+      const infoY     = 97;
+      const infoH     = 88;
+      const colMid    = pageW / 2 + 5;
+      const rightBoxX = colMid;
+      const rightBoxW = pageW - marginR - colMid;
+
+      // FROM box — border only
+      doc.rect(marginL, infoY, contentW / 2 - 8, infoH)
+        .strokeColor(C.faint).lineWidth(0.6).stroke();
+      doc.fillColor(C.light).font('Helvetica-Bold').fontSize(7.5)
+        .text('FROM', marginL + 10, infoY + 8);
+      doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(9.5)
+        .text('Madhu Nisha Crackers', marginL + 10, infoY + 20);
+      doc.fillColor(C.mid).font('Helvetica').fontSize(8)
+        .text('Sivakasi, Tamil Nadu',         marginL + 10, infoY + 34)
+        .text('+91 94875 24689',              marginL + 10, infoY + 46)
+        .text('madhunishacrackers@gmail.com', marginL + 10, infoY + 58)
+        .text('www.madhunishacrackers.com',   marginL + 10, infoY + 70);
+
+      // BILL TO box — border only
+      doc.rect(rightBoxX, infoY, rightBoxW, infoH)
+        .strokeColor(C.faint).lineWidth(0.6).stroke();
+      doc.fillColor(C.light).font('Helvetica-Bold').fontSize(7.5)
+        .text('BILL TO', rightBoxX + 10, infoY + 8);
+      doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(9.5)
+        .text(customerDetails.customer_name || 'N/A', rightBoxX + 10, infoY + 20, { width: rightBoxW - 20 });
+
+      let addressText = customerDetails.address || 'N/A';
+      if (addressText.length > 38) addressText = addressText.substring(0, 35) + '…';
+      const distState = [customerDetails.district, customerDetails.state].filter(Boolean).join(', ');
+      doc.fillColor(C.mid).font('Helvetica').fontSize(8)
+        .text(addressText, rightBoxX + 10, infoY + 34, { width: rightBoxW - 20 })
+        .text(distState,   rightBoxX + 10, infoY + 46, { width: rightBoxW - 20 })
+        .text(`Mobile: ${customerDetails.mobile_number || 'N/A'}`, rightBoxX + 10, infoY + 58);
       if (data.agent_name) {
-        doc.text(`Agent: ${data.agent_name}`, 280, y + lineHeight, { align: 'right' });
-        y += lineHeight;
+        doc.text(`Agent: ${data.agent_name}`, rightBoxX + 10, infoY + 70, { width: rightBoxW - 20 });
       }
 
-      // Calculate table starting position
-      const companyDetailsBottom = 125;
-      const customerDetailsBottom = y + lineHeight;
-      const tableY = Math.max(companyDetailsBottom, customerDetailsBottom) + 40;
-      const tableWidth = 500;
-      const colWidths = [30, 150, 50, 70, 70, 50, 100];
-      const colX = [50, 80, 210, 250, 320, 400, 450];
-      const rowHeight = 25;
-      const pageHeight = doc.page.height - doc.page.margins.bottom;
+      // ── Customer Type — plain label row ────────────────────────────
+      const custTypeY = infoY + infoH + 8;
+      doc.fillColor(C.light).font('Helvetica').fontSize(8)
+        .text('Customer Type:', marginL, custTypeY);
+      doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(8)
+        .text(data.customer_type || 'User', marginL + 78, custTypeY);
+      doc.strokeColor(C.faint).lineWidth(0.4)
+        .moveTo(marginL, custTypeY + 12).lineTo(marginL + contentW, custTypeY + 12).stroke();
 
-      let tableRowY = tableY;
+      // ── Order ID / Date — plain label row ───────────────────────────
+      const stripY = custTypeY + 18;
+      doc.fillColor(C.light).font('Helvetica').fontSize(8)
+        .text(`${isQuotation ? 'Quotation ID' : 'Order ID'}:`, marginL, stripY);
+      doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(8)
+        .text(id, marginL + (isQuotation ? 76 : 54), stripY);
+      doc.fillColor(C.light).font('Helvetica').fontSize(8)
+        .text(`Date: ${formattedDate}`, marginL, stripY, { width: contentW, align: 'right' });
+      doc.strokeColor(C.dark).lineWidth(0.6)
+        .moveTo(marginL, stripY + 13).lineTo(marginL + contentW, stripY + 13).stroke();
 
-      // Check if table header fits on the current page
-      if (tableRowY + 50 > pageHeight - 50) {
-        doc.addPage();
-        tableRowY = doc.page.margins.top;
-      }
+      // ── Table ───────────────────────────────────────────────────────
+      curY = stripY + 20;
+      curY = drawTableHeader(curY);
 
       const discountedProducts = products.filter(p => parseFloat(p.discount || 0) > 0);
-      const netRateProducts = products.filter(p => !p.discount || parseFloat(p.discount) === 0);
+      const netRateProducts    = products.filter(p => !p.discount || parseFloat(p.discount) === 0);
 
-      // Primary Table (Discounted Products)
+      // Discounted products
       if (discountedProducts.length > 0) {
-        doc.fontSize(12).font('Helvetica-Bold').text('DISCOUNTED PRODUCTS', 50, tableRowY);
-        tableRowY += 20;
-        doc.moveTo(50, tableRowY - 5).lineTo(50 + tableWidth, tableRowY - 5).stroke();
-        doc.fontSize(10).font('Helvetica-Bold')
-          .text('Sl.N', colX[0] + 5, tableRowY, { width: colWidths[0] - 10, align: 'center' })
-          .text('Product', colX[1] + 5, tableRowY, { width: colWidths[1] - 10, align: 'left' })
-          .text('Qty', colX[2] + 5, tableRowY, { width: colWidths[2] - 10, align: 'center' })
-          .text('Rate', colX[3] + 5, tableRowY, { width: colWidths[3] - 10, align: 'left' })
-          .text('Disc Rate', colX[4] + 5, tableRowY, { width: colWidths[4] - 10, align: 'left' })
-          .text('Per', colX[5] + 5, tableRowY, { width: colWidths[5] - 10, align: 'center' })
-          .text('Total', colX[6] + 5, tableRowY, { width: colWidths[6] - 10, align: 'left' });
-        doc.moveTo(50, tableRowY + 15).lineTo(50 + tableWidth, tableRowY + 15).stroke();
-        colX.forEach((x, i) => {
-          doc.moveTo(x, tableRowY - 5).lineTo(x, tableRowY + 15).stroke();
-          if (i === colX.length - 1) {
-            doc.moveTo(x + colWidths[i], tableRowY - 5).lineTo(x + colWidths[i], tableRowY + 15).stroke();
-          }
-        });
+        ensureSpace(16 + rowH);
+        curY = drawSectionLabel(curY, 'DISCOUNTED PRODUCTS');
 
-        tableRowY += rowHeight;
-        discountedProducts.forEach((product, index) => {
-          if (tableRowY + rowHeight > pageHeight - 50) {
-            doc.addPage();
-            tableRowY = doc.page.margins.top;
-            doc.fontSize(12).font('Helvetica-Bold').text('DISCOUNTED PRODUCTS (Continued)', 50, tableRowY);
-            tableRowY += 20;
-            doc.moveTo(50, tableRowY - 5).lineTo(50 + tableWidth, tableRowY - 5).stroke();
-            doc.fontSize(10).font('Helvetica-Bold')
-              .text('Sl.N', colX[0] + 5, tableRowY, { width: colWidths[0] - 10, align: 'center' })
-              .text('Product', colX[1] + 5, tableRowY, { width: colWidths[1] - 10, align: 'left' })
-              .text('Qty', colX[2] + 5, tableRowY, { width: colWidths[2] - 10, align: 'center' })
-              .text('Rate', colX[3] + 5, tableRowY, { width: colWidths[3] - 10, align: 'left' })
-              .text('Disc Rate', colX[4] + 5, tableRowY, { width: colWidths[4] - 10, align: 'left' })
-              .text('Per', colX[5] + 5, tableRowY, { width: colWidths[5] - 10, align: 'center' })
-              .text('Total', colX[6] + 5, tableRowY, { width: colWidths[6] - 10, align: 'left' });
-            doc.moveTo(50, tableRowY + 15).lineTo(50 + tableWidth, tableRowY + 15).stroke();
-            colX.forEach((x, i) => {
-              doc.moveTo(x, tableRowY - 5).lineTo(x, tableRowY + 15).stroke();
-              if (i === colX.length - 1) {
-                doc.moveTo(x + colWidths[i], tableRowY - 5).lineTo(x + colWidths[i], tableRowY + 15).stroke();
-              }
-            });
-            tableRowY += rowHeight;
-          }
+        discountedProducts.forEach((product, idx) => {
+          ensureSpace(rowH);
+          const price     = parseFloat(product.price) || 0;
+          const discount  = parseFloat(product.discount || 0);
+          const discRate  = price - price * discount / 100;
+          const lineTotal = discRate * (product.quantity || 1);
+          const name      = (product.productname || 'N/A').length > 38
+            ? product.productname.substring(0, 35) + '…'
+            : (product.productname || 'N/A');
 
-          const price = parseFloat(product.price) || 0;
-          const discount = parseFloat(product.discount || 0) || 0;
-          const discRate = price - (price * discount / 100);
-          const productTotal = discRate * (product.quantity || 1);
+          // No alternating fill — just white rows
+          doc.fillColor(C.mid).font('Helvetica').fontSize(8.5)
+            .text(idx + 1,               colX[0] + 3, curY + 6, { width: colW[0] - 6, align: 'center' })
+            .text(name,                  colX[1] + 3, curY + 6, { width: colW[1] - 6, align: 'left' })
+            .text(product.quantity || 1, colX[2] + 3, curY + 6, { width: colW[2] - 6, align: 'center' });
 
-          let productName = product.productname || 'N/A';
-          if (productName.length > 30) {
-            productName = productName.substring(0, 27) + '...';
-          }
+          // Strikethrough original rate
+          const rateStr = `Rs.${price.toFixed(2)}`;
+          const rateTW  = doc.widthOfString(rateStr, { fontSize: 8.5 });
+          const rateX   = colX[3] + colW[3] - 6 - rateTW;
+          doc.fillColor(C.light).font('Helvetica').fontSize(8.5)
+            .text(rateStr, colX[3] + 3, curY + 6, { width: colW[3] - 6, align: 'right' });
+          doc.strokeColor(C.light).lineWidth(0.7)
+            .moveTo(rateX, curY + 9).lineTo(rateX + rateTW, curY + 9).stroke();
 
-          doc.font('Helvetica')
-            .text(index + 1, colX[0] + 5, tableRowY, { width: colWidths[0] - 10, align: 'center' })
-            .text(productName, colX[1] + 5, tableRowY, { width: colWidths[1] - 10, align: 'left' })
-            .text(product.quantity || 1, colX[2] + 5, tableRowY, { width: colWidths[2] - 10, align: 'center' })
-            .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, tableRowY, { width: colWidths[3] - 10, align: 'left' })
-            .text(`Rs.${discRate.toFixed(2)}`, colX[4] + 5, tableRowY, { width: colWidths[4] - 10, align: 'left' })
-            .text(product.per || 'N/A', colX[5] + 5, tableRowY, { width: colWidths[5] - 10, align: 'center' })
-            .text(`Rs.${productTotal.toFixed(2)}`, colX[6] + 5, tableRowY, { width: colWidths[6] - 10, align: 'left' });
+          doc.fillColor(C.green).font('Helvetica-Bold').fontSize(8.5)
+            .text(`Rs.${discRate.toFixed(2)}`,  colX[4] + 3, curY + 6, { width: colW[4] - 6, align: 'right' });
+          doc.fillColor(C.mid).font('Helvetica').fontSize(8.5)
+            .text(product.per || 'N/A',          colX[5] + 3, curY + 6, { width: colW[5] - 6, align: 'center' });
+          doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(8.5)
+            .text(`Rs.${lineTotal.toFixed(2)}`,  colX[6] + 3, curY + 6, { width: colW[6] - 6, align: 'right' });
 
-          doc.moveTo(50, tableRowY + 15).lineTo(50 + tableWidth, tableRowY + 15).stroke();
-          colX.forEach((x, i) => {
-            doc.moveTo(x, tableRowY - 5).lineTo(x, tableRowY + 15).stroke();
-            if (i === colX.length - 1) {
-              doc.moveTo(x + colWidths[i], tableRowY - 5).lineTo(x + colWidths[i], tableRowY + 15).stroke();
-            }
-          });
-
-          tableRowY += rowHeight;
+          drawRowLines(curY);
+          curY += rowH;
+          rowIndex++;
         });
       }
 
-      // Secondary Table (Net Rate Products)
+      // Net rate products
       if (netRateProducts.length > 0) {
-        tableRowY += 30;
-        if (tableRowY + 50 > pageHeight - 50) {
-          doc.addPage();
-          tableRowY = doc.page.margins.top;
-        }
+        ensureSpace(24 + rowH);
+        curY += 6;
+        curY = drawSectionLabel(curY, 'NET RATE PRODUCTS');
+        rowIndex = 0;
 
-        doc.fontSize(12).font('Helvetica-Bold').text('NET RATE PRODUCTS', 50, tableRowY);
-        tableRowY += 20;
-        doc.moveTo(50, tableRowY - 5).lineTo(50 + tableWidth, tableRowY - 5).stroke();
-        doc.fontSize(10).font('Helvetica-Bold')
-          .text('Sl.N', colX[0] + 5, tableRowY, { width: colWidths[0] - 10, align: 'center' })
-          .text('Product', colX[1] + 5, tableRowY, { width: colWidths[1] - 10, align: 'left' })
-          .text('Qty', colX[2] + 5, tableRowY, { width: colWidths[2] - 10, align: 'center' })
-          .text('Rate', colX[3] + 5, tableRowY, { width: colWidths[3] - 10, align: 'left' })
-          .text('Disc Rate', colX[4] + 5, tableRowY, { width: colWidths[4] - 10, align: 'left' })
-          .text('Per', colX[5] + 5, tableRowY, { width: colWidths[5] - 10, align: 'center' })
-          .text('Total', colX[6] + 5, tableRowY, { width: colWidths[6] - 10, align: 'left' });
-        doc.moveTo(50, tableRowY + 15).lineTo(50 + tableWidth, tableRowY + 15).stroke();
-        colX.forEach((x, i) => {
-          doc.moveTo(x, tableRowY - 5).lineTo(x, tableRowY + 15).stroke();
-          if (i === colX.length - 1) {
-            doc.moveTo(x + colWidths[i], tableRowY - 5).lineTo(x + colWidths[i], tableRowY + 15).stroke();
-          }
-        });
+        netRateProducts.forEach((product, idx) => {
+          ensureSpace(rowH);
+          const price     = parseFloat(product.price) || 0;
+          const discount  = parseFloat(product.discount || 0);
+          const discRate  = price - price * discount / 100;
+          const lineTotal = discRate * (product.quantity || 1);
+          const name      = (product.productname || 'N/A').length > 38
+            ? product.productname.substring(0, 35) + '…'
+            : (product.productname || 'N/A');
 
-        tableRowY += rowHeight;
-        netRateProducts.forEach((product, index) => {
-          if (tableRowY + rowHeight > pageHeight - 50) {
-            doc.addPage();
-            tableRowY = doc.page.margins.top;
-            doc.fontSize(12).font('Helvetica-Bold').text('NET RATE PRODUCTS (Continued)', 50, tableRowY);
-            tableRowY += 20;
-            doc.moveTo(50, tableRowY - 5).lineTo(50 + tableWidth, tableRowY - 5).stroke();
-            doc.fontSize(10).font('Helvetica-Bold')
-              .text('Sl.N', colX[0] + 5, tableRowY, { width: colWidths[0] - 10, align: 'center' })
-              .text('Product', colX[1] + 5, tableRowY, { width: colWidths[1] - 10, align: 'left' })
-              .text('Qty', colX[2] + 5, tableRowY, { width: colWidths[2] - 10, align: 'center' })
-              .text('Rate', colX[3] + 5, tableRowY, { width: colWidths[3] - 10, align: 'left' })
-              .text('Disc Rate', colX[4] + 5, tableRowY, { width: colWidths[4] - 10, align: 'left' })
-              .text('Per', colX[5] + 5, tableRowY, { width: colWidths[5] - 10, align: 'center' })
-              .text('Total', colX[6] + 5, tableRowY, { width: colWidths[6] - 10, align: 'left' });
-            doc.moveTo(50, tableRowY + 15).lineTo(50 + tableWidth, tableRowY + 15).stroke();
-            colX.forEach((x, i) => {
-              doc.moveTo(x, tableRowY - 5).lineTo(x, tableRowY + 15).stroke();
-              if (i === colX.length - 1) {
-                doc.moveTo(x + colWidths[i], tableRowY - 5).lineTo(x + colWidths[i], tableRowY + 15).stroke();
-              }
-            });
-            tableRowY += rowHeight;
-          }
+          doc.fillColor(C.mid).font('Helvetica').fontSize(8.5)
+            .text(idx + 1,               colX[0] + 3, curY + 6, { width: colW[0] - 6, align: 'center' })
+            .text(name,                  colX[1] + 3, curY + 6, { width: colW[1] - 6, align: 'left' })
+            .text(product.quantity || 1, colX[2] + 3, curY + 6, { width: colW[2] - 6, align: 'center' })
+            .text(`Rs.${price.toFixed(2)}`,    colX[3] + 3, curY + 6, { width: colW[3] - 6, align: 'right' })
+            .text(`Rs.${discRate.toFixed(2)}`, colX[4] + 3, curY + 6, { width: colW[4] - 6, align: 'right' })
+            .text(product.per || 'N/A',        colX[5] + 3, curY + 6, { width: colW[5] - 6, align: 'center' });
+          doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(8.5)
+            .text(`Rs.${lineTotal.toFixed(2)}`, colX[6] + 3, curY + 6, { width: colW[6] - 6, align: 'right' });
 
-          const price = parseFloat(product.price) || 0;
-          const discount = parseFloat(product.discount || 0) || 0;
-          const discRate = price - (price * discount / 100);
-          const productTotal = discRate * (product.quantity || 1);
-
-          let productName = product.productname || 'N/A';
-          if (productName.length > 30) {
-            productName = productName.substring(0, 27) + '...';
-          }
-
-          doc.font('Helvetica')
-            .text(index + 1, colX[0] + 5, tableRowY, { width: colWidths[0] - 10, align: 'center' })
-            .text(productName, colX[1] + 5, tableRowY, { width: colWidths[1] - 10, align: 'left' })
-            .text(product.quantity || 1, colX[2] + 5, tableRowY, { width: colWidths[2] - 10, align: 'center' })
-            .text(`Rs.${price.toFixed(2)}`, colX[3] + 5, tableRowY, { width: colWidths[3] - 10, align: 'left' })
-            .text(`Rs.${discRate.toFixed(2)}`, colX[4] + 5, tableRowY, { width: colWidths[4] - 10, align: 'left' })
-            .text(product.per || 'N/A', colX[5] + 5, tableRowY, { width: colWidths[5] - 10, align: 'center' })
-            .text(`Rs.${productTotal.toFixed(2)}`, colX[6] + 5, tableRowY, { width: colWidths[6] - 10, align: 'left' });
-
-          doc.moveTo(50, tableRowY + 15).lineTo(50 + tableWidth, tableRowY + 15).stroke();
-          colX.forEach((x, i) => {
-            doc.moveTo(x, tableRowY - 5).lineTo(x, tableRowY + 15).stroke();
-            if (i === colX.length - 1) {
-              doc.moveTo(x + colWidths[i], tableRowY - 5).lineTo(x + colWidths[i], tableRowY + 15).stroke();
-            }
-          });
-
-          tableRowY += rowHeight;
+          drawRowLines(curY);
+          curY += rowH;
+          rowIndex++;
         });
       }
 
-      // Totals Section
-      tableRowY += 30;
-      if (tableRowY + 120 > pageHeight - 50) {
-        doc.addPage();
-        tableRowY = doc.page.margins.top;
-      }
-
-      const netRate = parseFloat(dbValues.net_rate) || 0;
-      const youSave = parseFloat(dbValues.you_save) || 0;
+      // ── Summary totals ──────────────────────────────────────────────
+      const netRate            = parseFloat(dbValues.net_rate) || 0;
+      const youSave            = parseFloat(dbValues.you_save) || 0;
       const additionalDiscount = parseFloat(dbValues.additional_discount) || 0;
-      const subtotal = netRate - youSave;
-      const additionalDiscountAmount = subtotal * (additionalDiscount / 100);
-      const discountedSubtotal = subtotal - additionalDiscountAmount;
-      const processingFee = parseFloat(dbValues.processing_fee) || (discountedSubtotal * 0.01 );
-      const total = parseFloat(dbValues.total) || (discountedSubtotal + processingFee);
+      const subtotal           = netRate - youSave;
+      const additionalDiscAmt  = subtotal * (additionalDiscount / 100);
+      const discountedSubtotal = subtotal - additionalDiscAmt;
+      const processingFee      = parseFloat(dbValues.processing_fee) || discountedSubtotal * 0.01;
+      const total              = parseFloat(dbValues.total) || discountedSubtotal + processingFee;
 
-      doc.fontSize(10).font('Helvetica-Bold')
-        .text(`Net Rate: Rs.${netRate.toFixed(2)}`, 350, tableRowY, { width: 150, align: 'right' });
-      tableRowY += 20;
-      doc.text(`Discount: Rs.${youSave.toFixed(2)}`, 350, tableRowY, { width: 150, align: 'right' });
-      if (additionalDiscount > 0) {
-        tableRowY += 20;
-        doc.text(`Extra Discount: Rs.${additionalDiscountAmount.toFixed(2)}`, 350, tableRowY, { width: 150, align: 'right' });
-      }
-      tableRowY += 20;
-      doc.text(`Processing Fee: Rs.${processingFee.toFixed(2)}`, 350, tableRowY, { width: 150, align: 'right' });
-      tableRowY += 20;
-      doc.text(`Total: Rs.${total.toFixed(2)}`, 350, tableRowY, { width: 150, align: 'right' });
+      const summaryRowCount = 3 + (additionalDiscount > 0 ? 1 : 0);
+      const totalsH         = 16 + summaryRowCount * 20 + 28 + 10;
 
-      // Footer
-      if (tableRowY + 50 > pageHeight - 50) {
-        doc.addPage();
-        tableRowY = doc.page.margins.top;
-      }
-      doc.fontSize(10).font('Helvetica')
-        .text('Thank you for your business!', 50, tableRowY + 30, { align: 'center' })
-        .text('Madhu Nisha Crackers, Sivakasi', 50, tableRowY + 45, { align: 'center' });
+      ensureSpace(totalsH + 16);
+      curY += 14;
+
+      const totBoxW = 215;
+      const totBoxX = pageW - marginR - totBoxW;
+      const tncBoxW = contentW - totBoxW - 14;
+
+      // T&C — border box, no fill
+      doc.rect(marginL, curY, tncBoxW, totalsH)
+        .strokeColor(C.faint).lineWidth(0.6).stroke();
+      doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(8)
+        .text('TERMS & CONDITIONS', marginL + 10, curY + 8, { width: tncBoxW - 20 });
+      doc.strokeColor(C.faint).lineWidth(0.3)
+        .moveTo(marginL + 10, curY + 18).lineTo(marginL + tncBoxW - 10, curY + 18).stroke();
+      doc.fillColor(C.mid).font('Helvetica').fontSize(7.5)
+        .text('1. Product images are for reference only; actual items may vary.',           marginL + 10, curY + 24, { width: tncBoxW - 20 })
+        .text('2. Delivery charges are payable by customer to the transport provider.',     marginL + 10, curY + 38, { width: tncBoxW - 20 })
+        .text("3. Pickup from Sivakasi warehouse is at the buyer's own cost.",              marginL + 10, curY + 52, { width: tncBoxW - 20 })
+        .text('4. Prices are valid at the time of quotation and subject to change.',        marginL + 10, curY + 66, { width: tncBoxW - 20 });
+
+      // Totals — border box, no fill
+      doc.rect(totBoxX, curY, totBoxW, totalsH)
+        .strokeColor(C.faint).lineWidth(0.6).stroke();
+
+      // "ORDER SUMMARY" header — just bold text + underline
+      doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(8.5)
+        .text('ORDER SUMMARY', totBoxX + 10, curY + 6, { width: totBoxW - 20, align: 'center' });
+      doc.strokeColor(C.faint).lineWidth(0.4)
+        .moveTo(totBoxX + 8, curY + 17).lineTo(totBoxX + totBoxW - 8, curY + 17).stroke();
+
+      let tY = curY + 20;
+
+      const totRow = (label, value, bold = false, highlight = false) => {
+        if (highlight) {
+          // Total row — double line above + bold large text
+          doc.strokeColor(C.dark).lineWidth(0.6)
+            .moveTo(totBoxX + 8, tY - 3).lineTo(totBoxX + totBoxW - 8, tY - 3).stroke();
+          doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(10)
+            .text(label, totBoxX + 10, tY + 3, { width: totBoxW * 0.55 - 10 })
+            .text(value, totBoxX + 10, tY + 3, { width: totBoxW - 20, align: 'right' });
+        } else {
+          doc.fillColor(bold ? C.dark : C.mid)
+            .font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8.5)
+            .text(label, totBoxX + 10, tY, { width: totBoxW * 0.55 - 10 })
+            .text(value, totBoxX + 10, tY, { width: totBoxW - 20, align: 'right' });
+        }
+        tY += 20;
+      };
+
+      const promoDiscount = parseFloat(dbValues.promo_discount) || 0;
+
+      totRow('Net Rate (MRP)',      `Rs.${netRate.toFixed(2)}`);
+      totRow('Product Discount',    `- Rs.${youSave.toFixed(2)}`, true);
+      if (additionalDiscount > 0)
+        totRow(`Extra Discount (${additionalDiscount}%)`, `- Rs.${additionalDiscAmt.toFixed(2)}`, true);
+      if (promoDiscount > 0)
+        totRow('Promo Discount',    `- Rs.${promoDiscount.toFixed(2)}`, true);
+      totRow('Processing Fee (1%)', `Rs.${processingFee.toFixed(2)}`);
+      totRow('TOTAL PAYABLE',       `Rs.${total.toFixed(2)}`, true, true);
+
+      // ── Footer (thin orange underline only) ─────────────────────────
+      drawPageFooter(pageNum);
 
       doc.end();
 
       stream.on('finish', () => {
         if (!fs.existsSync(pdfPath)) {
-          console.error(`PDF file not found at ${pdfPath} for ${type}_id ${id}`);
           reject(new Error(`PDF file not found at ${pdfPath} for ${type}_id ${id}`));
           return;
         }
         console.log(`PDF generated at: ${pdfPath} for ${type}_id: ${id}`);
-        resolve({ pdfPath }); // Ensure consistent return format
+        resolve({ pdfPath });
       });
-
       stream.on('error', (err) => {
-        console.error(`Stream error for ${type}_id ${id}: ${err.message}`);
         reject(new Error(`Stream error: ${err.message}`));
       });
     } catch (err) {
-      console.error(`PDF generation failed for ${type}_id ${data.order_id || data.quotation_id}: ${err.message}`);
+      console.error(`PDF generation failed: ${err.message}`);
       reject(new Error(`PDF generation failed: ${err.message}`));
     }
   });
@@ -1344,5 +1411,210 @@ exports.searchQuotations = async (req, res) => {
     res.status(200).json(quotations);
   } catch (err) {
     res.status(500).json({ message: "Failed to search quotations", error: err.message });
+  }
+};
+
+exports.exportQuotationsToExcel = async (req, res) => {
+  let client;
+  try {
+    client = await pool.connect();
+
+    const result = await client.query(`
+      SELECT
+        quotation_id,
+        customer_name,
+        customer_type,
+        customer_id,
+        total,
+        created_at
+      FROM public.quotations
+      ORDER BY created_at DESC
+    `);
+
+    const quotations = result.rows;
+
+    // Group by customer_type
+    const grouped = quotations.reduce((acc, q) => {
+      let type = q.customer_type?.trim() || "User";
+      if (type === "Customer of Selected Agent") type = "Customer of Selected Agent";
+      if (!acc[type]) acc[type] = [];
+      acc[type].push(q);
+      return acc;
+    }, {});
+
+    const workbook = XLSX.utils.book_new();
+
+    const sheetConfig = [
+      { type: "User", name: "User_Quotations" },
+      { type: "Customer", name: "Customer_Quotations" },
+      { type: "Agent", name: "Agent_Quotations" },
+      { type: "Customer of Selected Agent", name: "Cust_of_Agent" },
+    ];
+
+    for (const { type, name } of sheetConfig) {
+      let data = grouped[type] || [];
+      if (data.length === 0) continue;
+
+      // Fetch Agent Name only for "Customer of Selected Agent"
+      if (type === "Customer of Selected Agent") {
+        for (let q of data) {
+          if (q.customer_id) {
+            try {
+              const agentRes = await client.query(`
+                SELECT c2.customer_name AS agent_name
+                FROM public.customers c1
+                INNER JOIN public.customers c2 ON c1.agent_id = c2.id
+                WHERE c1.id = $1
+              `, [q.customer_id]);
+              q.agent_name = agentRes.rows[0]?.agent_name || "N/A";
+            } catch (err) {
+              q.agent_name = "Error";
+            }
+          } else {
+            q.agent_name = "N/A";
+          }
+        }
+      }
+
+      const rows = data.map(q => ({
+        "Quotation ID": q.quotation_id || "N/A",
+        "Customer Name": q.customer_name || "N/A",
+        "Customer Type": q.customer_type || "User",
+        "Total Amount": q.total ? `₹${Math.round(Number(q.total))}` : "₹0",
+        "Date": q.created_at ? new Date(q.created_at).toLocaleDateString('en-GB') : "N/A",
+        ...(type === "Customer of Selected Agent" ? { "Agent Name": q.agent_name || "N/A" } : {})
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      const colWidths = rows.reduce((acc, row) => {
+        Object.keys(row).forEach((key, i) => {
+          const len = (row[key] || "").toString().length;
+          acc[i] = Math.max(acc[i] || 10, len + 4);
+        });
+        return acc;
+      }, []);
+      worksheet["!cols"] = colWidths.map(w => ({ wch: w }));
+
+      const safeName = name.replace(/[*?:/\\[\]]/g, "_").substring(0, 31);
+      XLSX.utils.book_append_sheet(workbook, worksheet, safeName);
+    }
+
+    try {
+      console.log("Generating Agent-wise Product Quotation Sheets...");
+
+      // Fetch all quotations under "Customer of Selected Agent" with agent_name joined
+      const agentQuotationsResult = await client.query(`
+        SELECT q.products, q.customer_id, c2.customer_name AS agent_name
+        FROM public.quotations q
+        INNER JOIN public.customers c ON q.customer_id = c.id
+        INNER JOIN public.customers c2 ON c.agent_id::bigint = c2.id
+        WHERE c.customer_type = 'Customer of Selected Agent'
+          AND c.agent_id IS NOT NULL
+          AND q.products IS NOT NULL
+      `);
+
+      // Aggregate: Agent → Product → Total Quantity
+      const agentProductTotals = {};
+
+      for (const row of agentQuotationsResult.rows) {
+        const agentName = row.agent_name || "Unknown Agent";
+        if (!agentProductTotals[agentName]) agentProductTotals[agentName] = {};
+
+        let products = [];
+        try {
+          products = typeof row.products === 'string' ? JSON.parse(row.products) : row.products;
+        } catch (e) {
+          continue;
+        }
+
+        products.forEach(p => {
+          const name = (p.productname || "Unknown Product").trim();
+          const qty = parseInt(p.quantity) || 0;
+          agentProductTotals[agentName][name] = (agentProductTotals[agentName][name] || 0) + qty;
+        });
+      }
+
+      // Create one sheet per agent
+      for (const [agentName, productMap] of Object.entries(agentProductTotals)) {
+        const rows = Object.entries(productMap)
+          .map(([productName, totalQty]) => ({
+            "Product Name": productName,
+            "Total Quoted Quantity": totalQty
+          }))
+          .sort((a, b) => b["Total Quoted Quantity"] - a["Total Quoted Quantity"]);
+
+        if (rows.length === 0) continue;
+
+        const worksheet = XLSX.utils.json_to_sheet(rows);
+
+        // Auto-size columns
+        worksheet["!cols"] = [
+          { wch: 45 },
+          { wch: 20 }
+        ];
+
+        // Safe sheet name
+        let baseName = agentName.replace(/[*?:/\\[\]]/g, "_").substring(0, 28);
+        if (baseName.length < 3) baseName = "Agent";
+        let sheetName = baseName;
+        let counter = 1;
+        while (workbook.SheetNames.includes(sheetName)) {
+          sheetName = baseName.substring(0, 31 - `_${counter}`.length) + `_${counter}`;
+          counter++;
+        }
+
+        XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+      }
+
+      // Optional: Add "All Agents Combined" Summary Sheet
+      const allAgentProducts = {};
+      for (const productMap of Object.values(agentProductTotals)) {
+        for (const [name, qty] of Object.entries(productMap)) {
+          allAgentProducts[name] = (allAgentProducts[name] || 0) + qty;
+        }
+      }
+
+      if (Object.keys(allAgentProducts).length > 0) {
+        const allRows = Object.entries(allAgentProducts)
+          .map(([name, qty]) => ({
+            "Product Name": name,
+            "Total Quoted (All Agents)": qty
+          }))
+          .sort((a, b) => b["Total Quoted (All Agents)"] - a["Total Quoted (All Agents)"]);
+
+        const allWs = XLSX.utils.json_to_sheet(allRows);
+        allWs["!cols"] = [{ wch: 50 }, { wch: 25 }];
+        XLSX.utils.book_append_sheet(workbook, allWs, "All_Agents_Products");
+      }
+    } catch (agentErr) {
+      console.error("Agent product sheets failed (continuing export):", agentErr.message);
+      // Non-critical error — continue
+    }
+
+    const fileName = `PhoenixCrackers_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
+    const filePath = path.join(__dirname, '../exports', fileName);
+
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    XLSX.writeFile(workbook, filePath);
+
+    res.download(filePath, fileName, (err) => {
+      if (err) {
+        console.error("Download failed:");
+        if (!res.headersSent) res.status(500).send("Failed to download file");
+      } else {
+        console.log(`Exported successfully: ${fileName}`);
+      }
+    });
+
+  } catch (err) {
+    console.error("Export failed completely:");
+    if (!res.headersSent) {
+      res.status(500).json({
+        message: "Export failed",
+        error: err.message
+      });
+    }
+  } finally {
+    if (client) client.release();
   }
 };

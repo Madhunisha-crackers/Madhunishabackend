@@ -15,5 +15,6 @@ router.get('/quotation/:quotation_id', directController.getQuotation);
 router.get('/invoice/:order_id', directController.getInvoice);
 router.post("/bookings/search", directController.searchBookings);
 router.post("/quotations/search", directController.searchQuotations);
+router.get('/export-quotations-excel', directController.exportQuotationsToExcel);
 
 module.exports = router;

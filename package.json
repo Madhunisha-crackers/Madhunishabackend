@@ -12,11 +12,12 @@
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^7.0.5",
-    "nodemon": "^3.1.10",
+    "nodemon": "^3.1.11",
     "path": "^0.12.7",
     "pdfkit": "^0.17.1",
     "pg": "^8.16.3",
-    "pg-format": "^1.0.4"
+    "pg-format": "^1.0.4",
+    "xlsx": "^0.18.5"
   },
   "scripts": {
     "start": "nodemon server.js"
