@@ -70,11 +70,11 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         doc.strokeColor(C.faint).lineWidth(1)
           .moveTo(marginL, 68).lineTo(marginL + contentW, 68).stroke();
         doc.fillColor(C.accent).font('Helvetica-Bold').fontSize(22)
-          .text('MADHU NISHA CRACKERS', marginL, 14, { width: contentW, align: 'center' });
-        doc.fillColor(C.mid).font('Times-Italic').fontSize(8.5)
-          .text("SIVAKASI'S FINEST FIREWORKS", marginL, 40, { width: contentW, align: 'center' });
-        doc.fillColor(C.light).fontSize(7.5)
-          .text('www.madhunishacrackers.com   |   +91 94875 24689   |   madhunishacrackers@gmail.com',
+          .text('MADHU NISHA CRACKERS', marginL, 10, { width: contentW, align: 'center' });
+        doc.fillColor(C.mid).font('Times-BoldItalic').fontSize(8.5)
+          .text("SIVAKASI'S FINEST FIREWORKS", marginL, 36, { width: contentW, align: 'center' });
+        doc.fillColor(C.mid).font('Times-BoldItalic').fontSize(10)
+          .text('www.madhunishacrackers.com   |   +91 94875 94689   |   madhunishacrackers@gmail.com',
             marginL, 52, { width: contentW, align: 'center' });
       };
 
@@ -157,16 +157,20 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       let formattedDate = 'N/A';
       if (customerDetails.created_at) {
         try {
-          const d = customerDetails.created_at instanceof Date
-            ? customerDetails.created_at : new Date(customerDetails.created_at);
-          if (!isNaN(d.getTime()))
-            formattedDate = d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          if (typeof customerDetails.created_at === 'string' && customerDetails.created_at.includes('/')) {
+            formattedDate = customerDetails.created_at;
+          } else {
+            const d = customerDetails.created_at instanceof Date
+              ? customerDetails.created_at : new Date(customerDetails.created_at);
+            if (!isNaN(d.getTime()))
+              formattedDate = d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+          }
         } catch (e) { /* ignore */ }
       }
 
       // ── FROM / BILL TO — two columns, bordered boxes, no fill ───────
       const infoY     = 97;
-      const infoH     = 88;
+      const infoH     = 74;
       const colMid    = pageW / 2 + 5;
       const rightBoxX = colMid;
       const rightBoxW = pageW - marginR - colMid;
@@ -180,9 +184,8 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         .text('Madhu Nisha Crackers', marginL + 10, infoY + 20);
       doc.fillColor(C.mid).font('Helvetica').fontSize(8)
         .text('Sivakasi, Tamil Nadu',         marginL + 10, infoY + 34)
-        .text('+91 94875 24689',              marginL + 10, infoY + 46)
-        .text('madhunishacrackers@gmail.com', marginL + 10, infoY + 58)
-        .text('www.madhunishacrackers.com',   marginL + 10, infoY + 70);
+        .text('+91 94875 94689',              marginL + 10, infoY + 46)
+        .text('madhunishacrackers@gmail.com', marginL + 10, infoY + 58);
 
       // BILL TO box — border only
       doc.rect(rightBoxX, infoY, rightBoxW, infoH)
@@ -246,25 +249,25 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
             : (product.productname || 'N/A');
 
           // No alternating fill — just white rows
-          doc.fillColor(C.mid).font('Helvetica').fontSize(8.5)
+          doc.fillColor(C.mid).font('Helvetica').fontSize(9.5)
             .text(idx + 1,               colX[0] + 3, curY + 6, { width: colW[0] - 6, align: 'center' })
             .text(name,                  colX[1] + 3, curY + 6, { width: colW[1] - 6, align: 'left' })
             .text(product.quantity || 1, colX[2] + 3, curY + 6, { width: colW[2] - 6, align: 'center' });
 
           // Strikethrough original rate
           const rateStr = `Rs.${price.toFixed(2)}`;
-          const rateTW  = doc.widthOfString(rateStr, { fontSize: 8.5 });
+          const rateTW  = doc.widthOfString(rateStr, { fontSize: 9.5 });
           const rateX   = colX[3] + colW[3] - 6 - rateTW;
-          doc.fillColor(C.light).font('Helvetica').fontSize(8.5)
+          doc.fillColor(C.light).font('Helvetica').fontSize(9.5)
             .text(rateStr, colX[3] + 3, curY + 6, { width: colW[3] - 6, align: 'right' });
           doc.strokeColor(C.light).lineWidth(0.7)
             .moveTo(rateX, curY + 9).lineTo(rateX + rateTW, curY + 9).stroke();
 
-          doc.fillColor(C.green).font('Helvetica-Bold').fontSize(8.5)
+          doc.fillColor(C.green).font('Helvetica-Bold').fontSize(9.5)
             .text(`Rs.${discRate.toFixed(2)}`,  colX[4] + 3, curY + 6, { width: colW[4] - 6, align: 'right' });
-          doc.fillColor(C.mid).font('Helvetica').fontSize(8.5)
+          doc.fillColor(C.mid).font('Helvetica').fontSize(9.5)
             .text(product.per || 'N/A',          colX[5] + 3, curY + 6, { width: colW[5] - 6, align: 'center' });
-          doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(8.5)
+          doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(9.5)
             .text(`Rs.${lineTotal.toFixed(2)}`,  colX[6] + 3, curY + 6, { width: colW[6] - 6, align: 'right' });
 
           drawRowLines(curY);
@@ -290,7 +293,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
             ? product.productname.substring(0, 35) + '…'
             : (product.productname || 'N/A');
 
-          doc.fillColor(C.mid).font('Helvetica').fontSize(8.5)
+          doc.fillColor(C.mid).font('Helvetica').fontSize(9.5)
             .text(idx + 1,               colX[0] + 3, curY + 6, { width: colW[0] - 6, align: 'center' })
             .text(name,                  colX[1] + 3, curY + 6, { width: colW[1] - 6, align: 'left' })
             .text(product.quantity || 1, colX[2] + 3, curY + 6, { width: colW[2] - 6, align: 'center' })
@@ -315,9 +318,11 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       const discountedSubtotal = subtotal - additionalDiscAmt;
       const processingFee      = parseFloat(dbValues.processing_fee) || discountedSubtotal * 0.01;
       const total              = parseFloat(dbValues.total) || discountedSubtotal + processingFee;
+      const promoDiscount = parseFloat(dbValues.promo_discount) || 0;
 
-      const summaryRowCount = 3 + (additionalDiscount > 0 ? 1 : 0);
-      const totalsH         = 16 + summaryRowCount * 20 + 28 + 10;
+      const hasExtraDiscount = additionalDiscount > 0 || promoDiscount > 0;
+      const summaryRowCount = 3 + (additionalDiscount > 0 ? 1 : 0) + (promoDiscount > 0 ? 1 : 0);
+      const totalsH         = 13 + summaryRowCount * 20 + 24 + 5 + (hasExtraDiscount ? 1 : 0);
 
       ensureSpace(totalsH + 16);
       curY += 14;
@@ -337,7 +342,13 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         .text('1. Product images are for reference only; actual items may vary.',           marginL + 10, curY + 24, { width: tncBoxW - 20 })
         .text('2. Delivery charges are payable by customer to the transport provider.',     marginL + 10, curY + 38, { width: tncBoxW - 20 })
         .text("3. Pickup from Sivakasi warehouse is at the buyer's own cost.",              marginL + 10, curY + 52, { width: tncBoxW - 20 })
-        .text('4. Prices are valid at the time of quotation and subject to change.',        marginL + 10, curY + 66, { width: tncBoxW - 20 });
+        .text('4. Prices are valid at the time of quotation and subject to change.',        marginL + 10, curY + 66, { width: tncBoxW - 20 })
+        .text('5. We encourage you to visit our shop in person for a more personalized experience and better purchase decisions.', marginL + 10, curY + 80, { width: tncBoxW - 20 });
+
+      if (hasExtraDiscount) {
+        doc.fillColor(C.accent).font('Helvetica-Bold').fontSize(7.5)
+          .text('Have a safe and great Diwali! Safely fire the crackers.', marginL + 10, curY + 100, { width: tncBoxW - 20 });
+      }
 
       // Totals — border box, no fill
       doc.rect(totBoxX, curY, totBoxW, totalsH)
@@ -367,8 +378,6 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         }
         tY += 20;
       };
-
-      const promoDiscount = parseFloat(dbValues.promo_discount) || 0;
 
       totRow('Net Rate (MRP)',      `Rs.${netRate.toFixed(2)}`);
       totRow('Product Discount',    `- Rs.${youSave.toFixed(2)}`, true);
@@ -589,10 +598,16 @@ exports.createQuotation = async (req, res) => {
 
     let pdfPath;
     try {
+      const now = new Date();
+      const day = String(now.getUTCDate() + Math.floor((now.getUTCHours() + 5.5) / 24)).padStart(2, '0');
+      const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+      const year = now.getUTCFullYear();
+      const formattedISTDate = `${day}/${month}/${year}`;
+
       const pdfResult = await generatePDF(
         'quotation',
         { quotation_id, customer_type: finalCustomerType, total: parsedTotal, agent_name },
-        customerDetails,
+        { ...customerDetails, created_at: formattedISTDate },
         enhancedProducts,
         { net_rate: parsedNetRate, you_save: parsedYouSave, total: parsedTotal, promo_discount: parsedPromoDiscount, additional_discount: parsedAdditionalDiscount }
       );
