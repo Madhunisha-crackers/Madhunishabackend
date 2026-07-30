@@ -42,12 +42,19 @@ async function getCachedProductTypes() {
 exports.addProduct = async (req, res) => {
   const client = await pool.connect();
   try {
-    const { serial_number, productname, price, per, discount, product_type, description = ""} = req.body;
+    const { serial_number, productname, price, per, discount, product_type, description = "" } = req.body;
     const existingImages = req.body.existingImages ? JSON.parse(req.body.existingImages) : [];
     const files = req.files || [];
 
     if (!serial_number || !productname || !price || !per || !discount || !product_type) {
       return res.status(400).json({ message: "All required fields must be provided" });
+    }
+
+    // Serial numbers may be alphanumeric (e.g. "SN-14A", "AB102"). Trim whitespace
+    // so visually-identical values aren't treated as distinct products.
+    const trimmedSerial = String(serial_number).trim();
+    if (!trimmedSerial) {
+      return res.status(400).json({ message: "Serial number cannot be empty" });
     }
 
     if (!["pieces", "box", "pkt"].includes(per)) {
@@ -85,17 +92,17 @@ exports.addProduct = async (req, res) => {
           image TEXT,
           description TEXT,
           status VARCHAR(10) NOT NULL DEFAULT 'off' CHECK (status IN ('on', 'off')),
-          fast_running BOOLEAN DEFAULT false,
+          fast_running BOOLEAN DEFAULT false
         )
       `);
       await client.query(
-        `CREATE INDEX IF NOT EXISTS idx_serial_number_${tableName} ON public.${tableName}(serial_number) CONCURRENTLY`
+        `CREATE INDEX IF NOT EXISTS idx_serial_number_${tableName} ON public.${tableName}(serial_number)`
       );
       await client.query(
-        `CREATE INDEX IF NOT EXISTS idx_productname_${tableName} ON public.${tableName}(productname) CONCURRENTLY`
+        `CREATE INDEX IF NOT EXISTS idx_productname_${tableName} ON public.${tableName}(productname)`
       );
       await client.query(
-        `CREATE INDEX IF NOT EXISTS idx_id_${tableName} ON public.${tableName}(id) CONCURRENTLY`
+        `CREATE INDEX IF NOT EXISTS idx_id_${tableName} ON public.${tableName}(id)`
       );
 
       productTypeCache.data = [...(productTypeCache.data || []), product_type];
@@ -104,7 +111,7 @@ exports.addProduct = async (req, res) => {
 
     const duplicateCheck = await client.query(
       `SELECT id FROM public.${tableName} WHERE serial_number = $1 OR productname = $2`,
-      [serial_number, productname]
+      [trimmedSerial, productname]
     );
 
     if (duplicateCheck.rows.length > 0) {
@@ -119,7 +126,7 @@ exports.addProduct = async (req, res) => {
     `;
 
     const values = [
-      serial_number,
+      trimmedSerial,
       productname,
       priceNum,
       per,
@@ -148,6 +155,11 @@ exports.updateProduct = async (req, res) => {
 
     if (!serial_number || !productname || !price || !per || !discount) {
       return res.status(400).json({ message: "All required fields must be provided" });
+    }
+
+    const trimmedSerial = String(serial_number).trim();
+    if (!trimmedSerial) {
+      return res.status(400).json({ message: "Serial number cannot be empty" });
     }
 
     if (!["pieces", "box", "pkt"].includes(per)) {
@@ -198,7 +210,7 @@ exports.updateProduct = async (req, res) => {
       SET serial_number = $1, productname = $2, price = $3, per = $4, discount = $5
     `;
 
-    const values = [serial_number, productname, priceNum, per, discountNum];
+    const values = [trimmedSerial, productname, priceNum, per, discountNum];
 
     let paramIndex = 6;
 
