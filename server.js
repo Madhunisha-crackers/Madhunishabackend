@@ -9,7 +9,7 @@ const upload = multer({
 });
 const app = express();
 
-app.use(cors());
+app.use(cors('*'));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -24,6 +24,7 @@ app.use('/api', require('./Router/Banner.router'));
 app.use('/api', require('./Router/Promocode.router'));
 app.use('/api/send-wholesale-enquiry', require('./Router/sendWholesaleEnquiry'));
 app.use('/api', require('./Router/SalesAnalysis.router'));
+app.use('/api/reviews', require('./Router/Review.router'));
 
 app.use((err, req, res, next) => {
   console.error('🔥 Error:', err.stack || err);

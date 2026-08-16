@@ -92,9 +92,12 @@ exports.addProduct = async (req, res) => {
           image TEXT,
           description TEXT,
           status VARCHAR(10) NOT NULL DEFAULT 'off' CHECK (status IN ('on', 'off')),
-          fast_running BOOLEAN DEFAULT false
+          fast_running BOOLEAN DEFAULT false,
+          is_free BOOLEAN DEFAULT false
         )
       `);
+      // Ensure is_free column exists on older tables (safe migration)
+      await client.query(`ALTER TABLE IF EXISTS public.${tableName} ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT false`);
       await client.query(
         `CREATE INDEX IF NOT EXISTS idx_serial_number_${tableName} ON public.${tableName}(serial_number)`
       );
@@ -261,7 +264,7 @@ exports.getProducts = async (req, res) => {
       try {
         const result = await client.query(
           `
-          SELECT id, serial_number, productname, price, per, discount, status, fast_running, description, image
+          SELECT id, serial_number, productname, price, per, discount, status, fast_running, is_free, description, image
           FROM public.${tableName}
           ORDER BY id
           LIMIT $1 OFFSET $2
@@ -280,6 +283,7 @@ exports.getProducts = async (req, res) => {
           image: row.image,
           status: row.status,
           fast_running: row.fast_running,
+          is_free: row.is_free,
           description: row.description || "",
         }));
       } finally {
@@ -340,9 +344,12 @@ exports.addProductType = async (req, res) => {
         image TEXT,
         description TEXT,
         status VARCHAR(10) NOT NULL DEFAULT 'off' CHECK (status IN ('on', 'off')),
-        fast_running BOOLEAN DEFAULT false
+        fast_running BOOLEAN DEFAULT false,
+        is_free BOOLEAN DEFAULT false
       )
     `);
+    // Ensure is_free column exists on older tables (safe migration)
+    await pool.query(`ALTER TABLE IF EXISTS public.${tableName} ADD COLUMN IF NOT EXISTS is_free BOOLEAN DEFAULT false`);
 
     productTypeCache.data = [...(productTypeCache.data || []), formattedProductType];
     productTypeCache.timestamp = Date.now();
@@ -495,5 +502,68 @@ exports.toggleProductStatus = async (req, res) => {
   } catch (err) {
     console.error("Error in toggleProductStatus:", err);
     res.status(500).json({ message: "Failed to toggle status", error: err.message });
+  }
+};
+
+exports.toggleFreeGift = async (req, res) => {
+  try {
+    const { tableName, id } = req.params;
+    const result = await pool.query(`SELECT is_free FROM public.${tableName} WHERE id = $1`, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    const current = result.rows[0].is_free;
+    const updated = !current;
+
+    await pool.query(`UPDATE public.${tableName} SET is_free = $1 WHERE id = $2`, [updated, id]);
+
+    res.status(200).json({ message: "Free gift status updated", is_free: updated });
+  } catch (err) {
+    console.error("Error in toggleFreeGift:", err);
+    res.status(500).json({ message: "Failed to update free gift status", error: err.message });
+  }
+};
+
+exports.getFreeProducts = async (req, res) => {
+  try {
+    const productTypesResult = await pool.query('SELECT DISTINCT product_type FROM public.products');
+    const productTypes = productTypesResult.rows.map(r => r.product_type);
+    let freeProducts = [];
+    for (const productType of productTypes) {
+      const tableName = productType.toLowerCase().replace(/\s+/g, '_');
+      try {
+        const result = await pool.query(
+          `SELECT id, serial_number, productname, price, per, discount, image, $1 AS product_type, is_free
+           FROM public.${tableName}
+           WHERE (is_free = true OR is_free::text = 'true' OR is_free::text = 'on') AND (status IS NULL OR status = 'on' OR status::text = 'true')`,
+          [productType]
+        );
+        freeProducts = freeProducts.concat(result.rows);
+      } catch (e) { /* skip */ }
+    }
+
+    // Fallback: If no products have been toggled to free yet, pick sample active products as default gift candidates
+    if (freeProducts.length === 0) {
+      for (const productType of productTypes) {
+        const tableName = productType.toLowerCase().replace(/\s+/g, '_');
+        try {
+          const result = await pool.query(
+            `SELECT id, serial_number, productname, price, per, discount, image, $1 AS product_type, true AS is_free
+             FROM public.${tableName}
+             WHERE (status IS NULL OR status = 'on' OR status::text = 'true')
+             LIMIT 1`,
+            [productType]
+          );
+          freeProducts = freeProducts.concat(result.rows);
+        } catch (e) { /* skip */ }
+      }
+    }
+
+    res.status(200).json(freeProducts);
+  } catch (err) {
+    console.error('Error in getFreeProducts:', err);
+    res.status(500).json({ message: 'Failed to fetch free products', error: err.message });
   }
 };

@@ -55,23 +55,23 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 
       // ── Colour palette (print-friendly — mostly black/grey, no fills) ──
       const C = {
-        black:       '#000000',
-        dark:        '#1C1917',
-        mid:         '#44403C',
-        light:       '#78716C',
-        faint:       '#D6D3D1',
-        green:       '#15803D',
-        white:       '#FFFFFF',
-        accent:      '#EA580C',  // used ONLY for company name text + footer underline
+        black: '#000000',
+        dark: '#1C1917',
+        mid: '#44403C',
+        light: '#78716C',
+        faint: '#D6D3D1',
+        green: '#15803D',
+        white: '#FFFFFF',
+        accent: '#EA580C',  // used ONLY for company name text + footer underline
       };
 
-      const pageW    = doc.page.width;
-      const pageH    = doc.page.height;
-      const marginL  = 45;
-      const marginR  = 45;
+      const pageW = doc.page.width;
+      const pageH = doc.page.height;
+      const marginL = 45;
+      const marginR = 45;
       const contentW = pageW - marginL - marginR;
-      const footerH  = 28;
-      const usableH  = pageH - footerH - 10;
+      const footerH = 28;
+      const usableH = pageH - footerH - 10;
 
       // ── Footer — plain text + one thin underline accent ─────────────
       const drawPageFooter = (pNum) => {
@@ -102,10 +102,10 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 
       // ── Table columns ───────────────────────────────────────────────
       // colW sums: 25+150+55+65+68+38+104 = 505 = contentW (595-45-45) ✓
-      const colX    = [marginL, marginL+25, marginL+175, marginL+230, marginL+295, marginL+363, marginL+401];
-      const colW    = [25, 150, 55, 65, 68, 38, 104];
+      const colX = [marginL, marginL + 25, marginL + 175, marginL + 230, marginL + 295, marginL + 363, marginL + 401];
+      const colW = [25, 150, 55, 65, 68, 38, 104];
       const headers = ['Sl.N', 'Product Name', 'Qty', 'Rate (Rs.)', 'Disc. Rate', 'Per', 'Total'];
-      const rowH    = 20;
+      const rowH = 20;
 
       const drawTableHeader = (y) => {
         // Bottom border under header row instead of filled background
@@ -147,8 +147,8 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       };
 
       // ── State ───────────────────────────────────────────────────────
-      let pageNum  = 1;
-      let curY     = 0;
+      let pageNum = 1;
+      let curY = 0;
       let rowIndex = 0;
 
       const ensureSpace = (needed) => {
@@ -157,8 +157,8 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
           doc.addPage();
           pageNum++;
           drawPageHeader();
-          curY     = 76;
-          curY     = drawTableHeader(curY);
+          curY = 76;
+          curY = drawTableHeader(curY);
           rowIndex = 0;
         }
       };
@@ -191,9 +191,9 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       }
 
       // ── FROM / BILL TO — two columns, bordered boxes, no fill ───────
-      const infoY     = 97;
-      const infoH     = 74;
-      const colMid    = pageW / 2 + 5;
+      const infoY = 97;
+      const infoH = 74;
+      const colMid = pageW / 2 + 5;
       const rightBoxX = colMid;
       const rightBoxW = pageW - marginR - colMid;
 
@@ -205,8 +205,8 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(9.5)
         .text('Madhu Nisha Crackers', marginL + 10, infoY + 20);
       doc.fillColor(C.mid).font('Helvetica').fontSize(8)
-        .text('Sivakasi, Tamil Nadu',         marginL + 10, infoY + 34)
-        .text('+91 94875 94689',              marginL + 10, infoY + 46)
+        .text('Sivakasi, Tamil Nadu', marginL + 10, infoY + 34)
+        .text('+91 94875 94689', marginL + 10, infoY + 46)
         .text('madhunishacrackers@gmail.com', marginL + 10, infoY + 58);
 
       // BILL TO box — border only
@@ -222,7 +222,7 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       const distState = [customerDetails.district, customerDetails.state].filter(Boolean).join(', ');
       doc.fillColor(C.mid).font('Helvetica').fontSize(8)
         .text(addressText, rightBoxX + 10, infoY + 34, { width: rightBoxW - 20 })
-        .text(distState,   rightBoxX + 10, infoY + 46, { width: rightBoxW - 20 })
+        .text(distState, rightBoxX + 10, infoY + 46, { width: rightBoxW - 20 })
         .text(`Mobile: ${customerDetails.mobile_number || 'N/A'}`, rightBoxX + 10, infoY + 58);
       if (data.agent_name) {
         doc.text(`Agent: ${data.agent_name}`, rightBoxX + 10, infoY + 70, { width: rightBoxW - 20 });
@@ -252,8 +252,9 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       curY = stripY + 20;
       curY = drawTableHeader(curY);
 
-      const discountedProducts = products.filter(p => parseFloat(p.discount || 0) > 0);
-      const netRateProducts    = products.filter(p => !p.discount || parseFloat(p.discount) === 0);
+      const discountedProducts = products.filter(p => parseFloat(p.discount || 0) > 0 && !p.is_gift);
+      const netRateProducts = products.filter(p => (!p.discount || parseFloat(p.discount) === 0) && !p.is_gift);
+      const giftProducts = products.filter(p => p.is_gift === true);
 
       // Discounted products
       if (discountedProducts.length > 0) {
@@ -262,35 +263,35 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 
         discountedProducts.forEach((product, idx) => {
           ensureSpace(rowH);
-          const price     = parseFloat(product.price) || 0;
-          const discount  = parseFloat(product.discount || 0);
-          const discRate  = price - price * discount / 100;
+          const price = parseFloat(product.price) || 0;
+          const discount = parseFloat(product.discount || 0);
+          const discRate = price - price * discount / 100;
           const lineTotal = discRate * (product.quantity || 1);
-          const name      = (product.productname || 'N/A').length > 38
+          const name = (product.productname || 'N/A').length > 38
             ? product.productname.substring(0, 35) + '…'
             : (product.productname || 'N/A');
 
           // No alternating fill — just white rows
           doc.fillColor(C.mid).font('Helvetica').fontSize(9.5)
-            .text(idx + 1,               colX[0] + 3, curY + 6, { width: colW[0] - 6, align: 'center' })
-            .text(name,                  colX[1] + 3, curY + 6, { width: colW[1] - 6, align: 'left' })
+            .text(idx + 1, colX[0] + 3, curY + 6, { width: colW[0] - 6, align: 'center' })
+            .text(name, colX[1] + 3, curY + 6, { width: colW[1] - 6, align: 'left' })
             .text(product.quantity || 1, colX[2] + 3, curY + 6, { width: colW[2] - 6, align: 'center' });
 
           // Strikethrough original rate
           const rateStr = `Rs.${price.toFixed(2)}`;
-          const rateTW  = doc.widthOfString(rateStr, { fontSize: 9.5 });
-          const rateX   = colX[3] + colW[3] - 6 - rateTW;
+          const rateTW = doc.widthOfString(rateStr, { fontSize: 9.5 });
+          const rateX = colX[3] + colW[3] - 6 - rateTW;
           doc.fillColor(C.light).font('Helvetica').fontSize(9.5)
             .text(rateStr, colX[3] + 3, curY + 6, { width: colW[3] - 6, align: 'right' });
           doc.strokeColor(C.light).lineWidth(0.7)
             .moveTo(rateX, curY + 9).lineTo(rateX + rateTW, curY + 9).stroke();
 
           doc.fillColor(C.green).font('Helvetica-Bold').fontSize(9.5)
-            .text(`Rs.${discRate.toFixed(2)}`,  colX[4] + 3, curY + 6, { width: colW[4] - 6, align: 'right' });
+            .text(`Rs.${discRate.toFixed(2)}`, colX[4] + 3, curY + 6, { width: colW[4] - 6, align: 'right' });
           doc.fillColor(C.mid).font('Helvetica').fontSize(9.5)
-            .text(product.per || 'N/A',          colX[5] + 3, curY + 6, { width: colW[5] - 6, align: 'center' });
+            .text(product.per || 'N/A', colX[5] + 3, curY + 6, { width: colW[5] - 6, align: 'center' });
           doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(9.5)
-            .text(`Rs.${lineTotal.toFixed(2)}`,  colX[6] + 3, curY + 6, { width: colW[6] - 6, align: 'right' });
+            .text(`Rs.${lineTotal.toFixed(2)}`, colX[6] + 3, curY + 6, { width: colW[6] - 6, align: 'right' });
 
           drawRowLines(curY);
           curY += rowH;
@@ -307,21 +308,21 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
 
         netRateProducts.forEach((product, idx) => {
           ensureSpace(rowH);
-          const price     = parseFloat(product.price) || 0;
-          const discount  = parseFloat(product.discount || 0);
-          const discRate  = price - price * discount / 100;
+          const price = parseFloat(product.price) || 0;
+          const discount = parseFloat(product.discount || 0);
+          const discRate = price - price * discount / 100;
           const lineTotal = discRate * (product.quantity || 1);
-          const name      = (product.productname || 'N/A').length > 38
+          const name = (product.productname || 'N/A').length > 38
             ? product.productname.substring(0, 35) + '…'
             : (product.productname || 'N/A');
 
           doc.fillColor(C.mid).font('Helvetica').fontSize(9.5)
-            .text(idx + 1,               colX[0] + 3, curY + 6, { width: colW[0] - 6, align: 'center' })
-            .text(name,                  colX[1] + 3, curY + 6, { width: colW[1] - 6, align: 'left' })
+            .text(idx + 1, colX[0] + 3, curY + 6, { width: colW[0] - 6, align: 'center' })
+            .text(name, colX[1] + 3, curY + 6, { width: colW[1] - 6, align: 'left' })
             .text(product.quantity || 1, colX[2] + 3, curY + 6, { width: colW[2] - 6, align: 'center' })
-            .text(`Rs.${price.toFixed(2)}`,    colX[3] + 3, curY + 6, { width: colW[3] - 6, align: 'right' })
+            .text(`Rs.${price.toFixed(2)}`, colX[3] + 3, curY + 6, { width: colW[3] - 6, align: 'right' })
             .text(`Rs.${discRate.toFixed(2)}`, colX[4] + 3, curY + 6, { width: colW[4] - 6, align: 'right' })
-            .text(product.per || 'N/A',        colX[5] + 3, curY + 6, { width: colW[5] - 6, align: 'center' });
+            .text(product.per || 'N/A', colX[5] + 3, curY + 6, { width: colW[5] - 6, align: 'center' });
           doc.fillColor(C.dark).font('Helvetica-Bold').fontSize(8.5)
             .text(`Rs.${lineTotal.toFixed(2)}`, colX[6] + 3, curY + 6, { width: colW[6] - 6, align: 'right' });
 
@@ -331,20 +332,62 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         });
       }
 
+      // ── Gift products section ────────────────────────────────────────
+      if (giftProducts.length > 0) {
+        ensureSpace(24 + rowH);
+        curY += 6;
+
+        // Section header
+        doc.fillColor(C.accent).font('Helvetica-Bold').fontSize(9)
+          .text('🎁  COMPLIMENTARY GIFTS', marginL, curY + 3, { width: contentW });
+        doc.strokeColor(C.accent).lineWidth(0.5)
+          .moveTo(marginL, curY + 16).lineTo(marginL + contentW, curY + 16).stroke();
+        curY += 18;
+
+        giftProducts.forEach((product, idx) => {
+          ensureSpace(rowH);
+          const name = (product.productname || 'Gift').length > 38
+            ? product.productname.substring(0, 35) + '…'
+            : (product.productname || 'Gift');
+
+          doc.fillColor(C.mid).font('Helvetica').fontSize(9.5)
+            .text(idx + 1, colX[0] + 3, curY + 6, { width: colW[0] - 6, align: 'center' })
+            .text(name, colX[1] + 3, curY + 6, { width: colW[1] - 6, align: 'left' })
+            .text(product.quantity || 1, colX[2] + 3, curY + 6, { width: colW[2] - 6, align: 'center' });
+
+          doc.fillColor(C.light).font('Helvetica').fontSize(9.5)
+            .text('—', colX[3] + 3, curY + 6, { width: colW[3] - 6, align: 'right' })
+            .text(product.per || '—', colX[5] + 3, curY + 6, { width: colW[5] - 6, align: 'center' });
+
+          doc.fillColor(C.green).font('Helvetica-Bold').fontSize(9.5)
+            .text('FREE', colX[4] + 3, curY + 6, { width: colW[4] - 6, align: 'right' })
+            .text('Rs. 0.00', colX[6] + 3, curY + 6, { width: colW[6] - 6, align: 'right' });
+
+          drawRowLines(curY);
+          curY += rowH;
+        });
+
+        // Italic note
+        ensureSpace(14);
+        doc.fillColor(C.light).font('Helvetica-Oblique').fontSize(7.5)
+          .text('* Complimentary gifts — no additional charge', marginL, curY + 2, { width: contentW });
+        curY += 12;
+      }
+
       // ── Summary totals ──────────────────────────────────────────────
-      const netRate            = parseFloat(dbValues.net_rate) || 0;
-      const youSave            = parseFloat(dbValues.you_save) || 0;
+      const netRate = parseFloat(dbValues.net_rate) || 0;
+      const youSave = parseFloat(dbValues.you_save) || 0;
       const additionalDiscount = parseFloat(dbValues.additional_discount) || 0;
-      const subtotal           = netRate - youSave;
-      const additionalDiscAmt  = subtotal * (additionalDiscount / 100);
+      const subtotal = netRate - youSave;
+      const additionalDiscAmt = subtotal * (additionalDiscount / 100);
       const discountedSubtotal = subtotal - additionalDiscAmt;
-      const processingFee      = parseFloat(dbValues.processing_fee) || discountedSubtotal * 0.01;
-      const total              = parseFloat(dbValues.total) || discountedSubtotal + processingFee;
+      const processingFee = parseFloat(dbValues.processing_fee) || discountedSubtotal * 0.01;
+      const total = parseFloat(dbValues.total) || discountedSubtotal + processingFee;
       const promoDiscount = parseFloat(dbValues.promo_discount) || 0;
 
       const hasExtraDiscount = additionalDiscount > 0 || promoDiscount > 0;
       const summaryRowCount = 3 + (additionalDiscount > 0 ? 1 : 0) + (promoDiscount > 0 ? 1 : 0);
-      const totalsH         = 13 + summaryRowCount * 20 + 24 + 5 + (hasExtraDiscount ? 1 : 0);
+      const totalsH = 13 + summaryRowCount * 20 + 24 + 5 + (hasExtraDiscount ? 1 : 0);
 
       ensureSpace(totalsH + 16);
       curY += 14;
@@ -361,10 +404,10 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       doc.strokeColor(C.faint).lineWidth(0.3)
         .moveTo(marginL + 10, curY + 18).lineTo(marginL + tncBoxW - 10, curY + 18).stroke();
       doc.fillColor(C.mid).font('Helvetica').fontSize(7.5)
-        .text('1. Product images are for reference only; actual items may vary.',           marginL + 10, curY + 24, { width: tncBoxW - 20 })
-        .text('2. Delivery charges are payable by customer to the transport provider.',     marginL + 10, curY + 38, { width: tncBoxW - 20 })
-        .text("3. Pickup from Sivakasi warehouse is at the buyer's own cost.",              marginL + 10, curY + 52, { width: tncBoxW - 20 })
-        .text('4. Prices are valid at the time of quotation and subject to change.',        marginL + 10, curY + 66, { width: tncBoxW - 20 })
+        .text('1. Product images are for reference only; actual items may vary.', marginL + 10, curY + 24, { width: tncBoxW - 20 })
+        .text('2. Delivery charges are payable by customer to the transport provider.', marginL + 10, curY + 38, { width: tncBoxW - 20 })
+        .text("3. Pickup from Sivakasi warehouse is at the buyer's own cost.", marginL + 10, curY + 52, { width: tncBoxW - 20 })
+        .text('4. Prices are valid at the time of quotation and subject to change.', marginL + 10, curY + 66, { width: tncBoxW - 20 })
         .text('5. We encourage you to visit our shop in person for a more personalized experience and better purchase decisions.', marginL + 10, curY + 80, { width: tncBoxW - 20 });
 
       if (hasExtraDiscount) {
@@ -401,14 +444,14 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
         tY += 20;
       };
 
-      totRow('Net Rate (MRP)',      `Rs.${netRate.toFixed(2)}`);
-      totRow('Product Discount',    `- Rs.${youSave.toFixed(2)}`, true);
+      totRow('Net Rate (MRP)', `Rs.${netRate.toFixed(2)}`);
+      totRow('Product Discount', `- Rs.${youSave.toFixed(2)}`, true);
       if (additionalDiscount > 0)
         totRow(`Extra Discount (${additionalDiscount}%)`, `- Rs.${additionalDiscAmt.toFixed(2)}`, true);
       if (promoDiscount > 0)
-        totRow('Promo Discount',    `- Rs.${promoDiscount.toFixed(2)}`, true);
+        totRow('Promo Discount', `- Rs.${promoDiscount.toFixed(2)}`, true);
       totRow('Processing Fee (1%)', `Rs.${processingFee.toFixed(2)}`);
-      totRow('TOTAL PAYABLE',       `Rs.${total.toFixed(2)}`, true, true);
+      totRow('TOTAL PAYABLE', `Rs.${total.toFixed(2)}`, true, true);
 
       // ── Footer (thin orange underline only) ─────────────────────────
       drawPageFooter(pageNum);
@@ -777,14 +820,14 @@ exports.updateQuotation = async (req, res) => {
 exports.deleteQuotation = async (req, res) => {
   try {
     const { quotation_id } = req.params;
-    if (!quotation_id || !/^[a-zA-Z0-9-_]+$/.test(quotation_id)) 
+    if (!quotation_id || !/^[a-zA-Z0-9-_]+$/.test(quotation_id))
       return res.status(400).json({ message: 'Invalid or missing Quotation ID', quotation_id });
 
     const quotationCheck = await pool.query(
       'SELECT * FROM public.quotations WHERE quotation_id = $1 AND status = $2',
       [quotation_id, 'pending']
     );
-    if (quotationCheck.rows.length === 0) 
+    if (quotationCheck.rows.length === 0)
       return res.status(404).json({ message: 'Quotation not found or not in pending status', quotation_id });
 
     await pool.query(
@@ -865,10 +908,10 @@ exports.getQuotation = async (req, res) => {
         { quotation_id, customer_type, total: parseFloat(total || 0), agent_name },
         { customer_name, address, mobile_number, email, district, state },
         enhancedProducts,
-        { 
-          net_rate: parseFloat(net_rate || 0), 
-          you_save: parseFloat(you_save || 0), 
-          total: parseFloat(total || 0), 
+        {
+          net_rate: parseFloat(net_rate || 0),
+          you_save: parseFloat(you_save || 0),
+          total: parseFloat(total || 0),
           promo_discount: parseFloat(promo_discount || 0),
           additional_discount: parseFloat(additional_discount || 0)
         }
@@ -1078,15 +1121,15 @@ exports.updateBooking = async (req, res) => {
     const { order_id } = req.params;
     const { products, net_rate, you_save, total, promo_discount, additional_discount, status, transport_details } = req.body;
 
-    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id)) 
+    if (!order_id || !/^[a-zA-Z0-9-_]+$/.test(order_id))
       return res.status(400).json({ message: 'Invalid or missing Order ID', order_id });
-    if (products && (!Array.isArray(products) || products.length === 0)) 
+    if (products && (!Array.isArray(products) || products.length === 0))
       return res.status(400).json({ message: 'Products array is required and must not be empty', order_id });
-    if (total && (isNaN(parseFloat(total)) || parseFloat(total) <= 0)) 
+    if (total && (isNaN(parseFloat(total)) || parseFloat(total) <= 0))
       return res.status(400).json({ message: 'Total must be a positive number', order_id });
-    if (status && !['booked', 'paid', 'dispatched', 'canceled'].includes(status)) 
+    if (status && !['booked', 'paid', 'dispatched', 'canceled'].includes(status))
       return res.status(400).json({ message: 'Invalid status', order_id });
-    if (status === 'dispatched' && !transport_details) 
+    if (status === 'dispatched' && !transport_details)
       return res.status(400).json({ message: 'Transport details required for dispatched status', order_id });
 
     const parsedNetRate = net_rate !== undefined ? parseFloat(net_rate) : undefined;
@@ -1102,7 +1145,7 @@ exports.updateBooking = async (req, res) => {
       'SELECT * FROM public.bookings WHERE order_id = $1',
       [order_id]
     );
-    if (bookingCheck.rows.length === 0) 
+    if (bookingCheck.rows.length === 0)
       return res.status(404).json({ message: 'Booking not found', order_id });
 
     const booking = bookingCheck.rows[0];
@@ -1321,10 +1364,10 @@ exports.getInvoice = async (req, res) => {
         { order_id, customer_type, total: parseFloat(total || 0), agent_name },
         { customer_name, address, mobile_number, email, district, state, created_at: created_at instanceof Date ? created_at.toISOString() : created_at },
         enhancedProducts,
-        { 
-          net_rate: parseFloat(net_rate || 0), 
-          you_save: parseFloat(you_save || 0), 
-          total: parseFloat(total || 0), 
+        {
+          net_rate: parseFloat(net_rate || 0),
+          you_save: parseFloat(you_save || 0),
+          total: parseFloat(total || 0),
           promo_discount: parseFloat(promo_discount || 0),
           additional_discount: parseFloat(additional_discount || 0)
         }
@@ -1418,7 +1461,7 @@ exports.searchQuotations = async (req, res) => {
     `;
 
     const result = await pool.query(query, [`%${customer_name}%`, `%${mobile_number}%`]);
-    
+
     const quotations = result.rows.map(row => ({
       ...row,
       type: 'quotation',
@@ -1612,7 +1655,7 @@ exports.exportQuotationsToExcel = async (req, res) => {
       // Non-critical error — continue
     }
 
-    const fileName = `PhoenixCrackers_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
+    const fileName = `PhoenixCrackers_Export_${new Date().toISOString().slice(0, 10)}.xlsx`;
     const filePath = path.join(__dirname, '../exports', fileName);
 
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
