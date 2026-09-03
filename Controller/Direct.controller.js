@@ -375,11 +375,36 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       }
 
       // ── Summary totals ──────────────────────────────────────────────
+      const isZeroDiscountProductType = (productType) => {
+        if (!productType) return false;
+        const normalized = productType.toString().toLowerCase().replace(/[\s_-]+/g, '');
+        return (
+          normalized.includes('comet') ||
+          normalized.includes('skyshot') ||
+          normalized.includes('repeatingshot') ||
+          normalized.includes('repeating')
+        );
+      };
+
       const netRate = parseFloat(dbValues.net_rate) || 0;
       const youSave = parseFloat(dbValues.you_save) || 0;
       const additionalDiscount = parseFloat(dbValues.additional_discount) || 0;
       const subtotal = netRate - youSave;
-      const additionalDiscAmt = subtotal * (additionalDiscount / 100);
+
+      let eligibleSubtotal = 0;
+      if (Array.isArray(products) && products.length > 0) {
+        eligibleSubtotal = products.reduce((acc, item) => {
+          if (isZeroDiscountProductType(item.product_type)) return acc;
+          const itemPrice = parseFloat(item.price) || 0;
+          const itemDisc = parseFloat(item.discount) || 0;
+          const itemQty = parseInt(item.quantity) || 1;
+          return acc + (itemPrice * (1 - itemDisc / 100) * itemQty);
+        }, 0);
+      } else {
+        eligibleSubtotal = subtotal;
+      }
+
+      const additionalDiscAmt = eligibleSubtotal * (additionalDiscount / 100);
       const discountedSubtotal = subtotal - additionalDiscAmt;
       const processingFee = parseFloat(dbValues.processing_fee) || discountedSubtotal * 0.01;
       const total = parseFloat(dbValues.total) || discountedSubtotal + processingFee;
