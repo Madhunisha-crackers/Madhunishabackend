@@ -47,7 +47,11 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       const pdfDir = path.resolve(__dirname, '../pdf_data');
       if (!fs.existsSync(pdfDir)) {
         fs.mkdirSync(pdfDir, { recursive: true });
-        fs.chmodSync(pdfDir, 0o770);
+        try {
+          fs.chmodSync(pdfDir, 0o770);
+        } catch (e) {
+          // ignore chmod errors on Windows
+        }
       }
       const pdfPath = path.join(pdfDir, `${safeCustomerName}-${id}-${type}.pdf`);
       const stream = fs.createWriteStream(pdfPath, { flags: 'w', mode: 0o660 });
@@ -375,17 +379,6 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       }
 
       // ── Summary totals ──────────────────────────────────────────────
-      const isZeroDiscountProductType = (productType) => {
-        if (!productType) return false;
-        const normalized = productType.toString().toLowerCase().replace(/[\s_-]+/g, '');
-        return (
-          normalized.includes('comet') ||
-          normalized.includes('skyshot') ||
-          normalized.includes('repeatingshot') ||
-          normalized.includes('repeating')
-        );
-      };
-
       const netRate = parseFloat(dbValues.net_rate) || 0;
       const youSave = parseFloat(dbValues.you_save) || 0;
       const additionalDiscount = parseFloat(dbValues.additional_discount) || 0;
@@ -394,10 +387,12 @@ const generatePDF = (type, data, customerDetails, products, dbValues) => {
       let eligibleSubtotal = 0;
       if (Array.isArray(products) && products.length > 0) {
         eligibleSubtotal = products.reduce((acc, item) => {
-          if (isZeroDiscountProductType(item.product_type)) return acc;
           const itemPrice = parseFloat(item.price) || 0;
           const itemDisc = parseFloat(item.discount) || 0;
           const itemQty = parseInt(item.quantity) || 1;
+          // Products with 0% discount, net_rate, multishot, custom products, or marked exempt are exempt from additional discount
+          const isCustom = item.isCustom || String(item.id || '').startsWith('custom') || (item.product_type || '').toLowerCase() === 'custom';
+          if (item.product_type === 'net_rate' || item.product_type === 'multishot' || itemDisc === 0 || item.exempt_additional_discount || isCustom) return acc;
           return acc + (itemPrice * (1 - itemDisc / 100) * itemQty);
         }, 0);
       } else {
@@ -562,29 +557,83 @@ exports.getProductsByType = async (req, res) => {
 
 exports.getAproductsByType = async (req, res) => {
   try {
-    const productTypesResult = await pool.query('SELECT DISTINCT product_type FROM public.products');
-    const productTypes = productTypesResult.rows.map(row => row.product_type);
-    let allProducts = [];
-    for (const productType of productTypes) {
-      const tableName = productType.toLowerCase().replace(/\s+/g, '_');
-      const query = `
-        SELECT id, serial_number, productname, price, per, discount, image, status, $1 AS product_type
-        FROM public.${tableName}
-      `;
-      const result = await pool.query(query, [productType]);
-      allProducts = allProducts.concat(result.rows);
+    let dbTypes = [];
+    try {
+      const productTypesResult = await pool.query('SELECT DISTINCT product_type FROM public.products');
+      dbTypes = productTypesResult.rows.map(row => row.product_type);
+    } catch (e) {
+      console.warn('Could not fetch from public.products:', e.message);
     }
-    const products = allProducts.map(row => ({
-      id: row.id,
-      product_type: row.product_type,
-      serial_number: row.serial_number,
-      productname: row.productname,
-      price: parseFloat(row.price || 0),
-      per: row.per,
-      discount: parseFloat(row.discount || 0),
-      image: row.image,
-      status: row.status
-    }));
+
+    const defaultTypes = [
+      "one_sound_crackers", "ground_chakkar", "flower_pots", "twinkling_star",
+      "rockets", "bombs", "repeating_shots", "comets_sky_shots",
+      "fancy_pencil_varieties", "fountain_and_fancy_novelties", "matches",
+      "guns_and_caps", "sparklers", "premium_sparklers", "gift_boxes", "kids_special"
+    ];
+
+    // Check all physical tables in public schema
+    let tableNamesInDb = new Set();
+    try {
+      const tablesResult = await pool.query(`
+        SELECT table_name FROM information_schema.tables 
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      `);
+      tableNamesInDb = new Set(tablesResult.rows.map(r => r.table_name.toLowerCase()));
+    } catch (e) {
+      console.warn('Could not query information_schema.tables:', e.message);
+    }
+
+    // Combine all potential types/tables
+    const nonProductTables = new Set([
+      'products', 'customers', 'quotations', 'bookings', 'promocodes',
+      'reviews', 'locations', 'banners', 'tracking', 'districts'
+    ]);
+
+    const allTypes = [...new Set([
+      ...defaultTypes,
+      ...dbTypes,
+      ...Array.from(tableNamesInDb).filter(t => !nonProductTables.has(t) && !t.startsWith('districts_'))
+    ])];
+
+    let allProducts = [];
+    for (const productType of allTypes) {
+      const tableName = productType.toLowerCase().replace(/\s+/g, '_');
+      if (tableNamesInDb.size > 0 && !tableNamesInDb.has(tableName)) {
+        continue;
+      }
+      try {
+        const query = `
+          SELECT id, serial_number, productname, price, per, discount, image, status, $1 AS product_type
+          FROM public.${tableName}
+        `;
+        const result = await pool.query(query, [productType]);
+        allProducts = allProducts.concat(result.rows);
+      } catch (tableErr) {
+        console.warn(`Could not query table ${tableName}:`, tableErr.message);
+      }
+    }
+
+    const seen = new Set();
+    const products = allProducts
+      .filter(row => {
+        const key = `${row.product_type}-${row.id}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map(row => ({
+        id: row.id,
+        product_type: row.product_type,
+        serial_number: row.serial_number,
+        productname: row.productname,
+        price: parseFloat(row.price || 0),
+        per: row.per,
+        discount: parseFloat(row.discount || 0),
+        image: row.image,
+        status: row.status
+      }));
+
     res.status(200).json(products);
   } catch (err) {
     console.error('Failed to fetch products:', err.message);
@@ -674,12 +723,17 @@ exports.createQuotation = async (req, res) => {
         return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)' });
 
       let productPer = per || 'Unit';
-      if (product_type.toLowerCase() !== 'custom') {
-        const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-        if (productCheck.rows.length === 0)
-          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
-        productPer = productCheck.rows[0].per || productPer;
+      const isCustom = product.isCustom || String(id).startsWith('custom') || product_type.toLowerCase() === 'custom';
+      if (!isCustom) {
+        try {
+          const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
+          if (productCheck.rows.length > 0 && productCheck.rows[0].per) {
+            productPer = productCheck.rows[0].per;
+          }
+        } catch (checkErr) {
+          console.warn(`Product verification warning for ${id}:`, checkErr.message);
+        }
       }
       enhancedProducts.push({ ...product, per: productPer });
     }
@@ -920,9 +974,17 @@ exports.getQuotation = async (req, res) => {
       let enhancedProducts = [];
       for (const p of parsedProducts) {
         if (!p.per) {
-          const tableName = p.product_type.toLowerCase().replace(/\s+/g, '_');
-          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
-          const per = productCheck.rows[0]?.per || '';
+          const isCustom = p.isCustom || String(p.id).startsWith('custom') || (p.product_type || '').toLowerCase() === 'custom';
+          let per = 'Unit';
+          if (!isCustom) {
+            try {
+              const tableName = (p.product_type || '').toLowerCase().replace(/\s+/g, '_');
+              const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
+              per = productCheck.rows[0]?.per || 'Unit';
+            } catch (e) {
+              per = 'Unit';
+            }
+          }
           enhancedProducts.push({ ...p, per });
         } else {
           enhancedProducts.push(p);
