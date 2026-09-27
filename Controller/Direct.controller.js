@@ -1106,14 +1106,19 @@ exports.createBooking = async (req, res) => {
         return res.status(400).json({ message: 'Invalid product entry (id, product_type, productname, quantity, price, discount required)' });
 
       let productPer = per || 'Unit';
-      if (product_type.toLowerCase() !== 'custom') {
-        const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-        if (productCheck.rows.length === 0)
-          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
-        productPer = productCheck.rows[0].per || productPer;
+      const isCustom = product.isCustom || String(id).startsWith('custom') || (product_type || '').toLowerCase() === 'custom' || isNaN(parseInt(id, 10));
+      if (!isCustom) {
+        try {
+          const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+          const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
+          if (productCheck.rows.length === 0)
+            return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable` });
+          productPer = productCheck.rows[0].per || productPer;
+        } catch (checkErr) {
+          console.warn(`Product verification warning for ${id}:`, checkErr.message);
+        }
       }
-      enhancedProducts.push({ ...product, per: productPer });
+      enhancedProducts.push({ ...product, per: productPer, isCustom: Boolean(isCustom) });
     }
 
     client = await pool.connect();
@@ -1264,16 +1269,24 @@ exports.updateBooking = async (req, res) => {
     if (products) {
       enhancedProducts = [];
       for (const product of products) {
-        const { id, product_type, quantity, price, discount } = product;
+        const { id, product_type, quantity, price, discount, per } = product;
         if (!id || !product_type || quantity < 1 || isNaN(parseFloat(price)) || isNaN(parseFloat(discount)))
           return res.status(400).json({ message: 'Invalid product entry', order_id });
 
-        const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
-        const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-        if (productCheck.rows.length === 0)
-          return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, order_id });
-        const per = productCheck.rows[0].per || '';
-        enhancedProducts.push({ ...product, per });
+        let productPer = per || 'Unit';
+        const isCustom = product.isCustom || String(id).startsWith('custom') || (product_type || '').toLowerCase() === 'custom' || isNaN(parseInt(id, 10));
+        if (!isCustom) {
+          try {
+            const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
+            const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
+            if (productCheck.rows.length === 0)
+              return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, order_id });
+            productPer = productCheck.rows[0].per || productPer;
+          } catch (checkErr) {
+            console.warn(`Product verification warning for ${id}:`, checkErr.message);
+          }
+        }
+        enhancedProducts.push({ ...product, per: productPer, isCustom: Boolean(isCustom) });
       }
     }
 
@@ -1431,14 +1444,20 @@ exports.getInvoice = async (req, res) => {
     let enhancedProducts = [];
     for (const p of parsedProducts) {
       if (!p.per) {
-        const tableName = p.product_type?.toLowerCase().replace(/\s+/g, '_');
-        if (!tableName) {
-          console.error(`Failed: Invalid product_type for product ${p.id} in order_id ${order_id}`);
-          return res.status(500).json({ message: 'Invalid product_type in products', order_id });
+        let per = 'Unit';
+        const isCustom = p.isCustom || String(p.id).startsWith('custom') || (p.product_type || '').toLowerCase() === 'custom' || isNaN(parseInt(p.id, 10));
+        if (!isCustom) {
+          try {
+            const tableName = p.product_type?.toLowerCase().replace(/\s+/g, '_');
+            if (tableName) {
+              const productCheck = await client.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
+              per = productCheck.rows[0]?.per || 'Unit';
+            }
+          } catch (e) {
+            per = 'Unit';
+          }
         }
-        const productCheck = await client.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [p.id]);
-        const per = productCheck.rows[0]?.per || 'Unit';
-        enhancedProducts.push({ ...p, per });
+        enhancedProducts.push({ ...p, per, isCustom: Boolean(isCustom) });
       } else {
         enhancedProducts.push(p);
       }
