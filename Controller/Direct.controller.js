@@ -1242,12 +1242,12 @@ exports.updateBooking = async (req, res) => {
 
     const booking = bookingCheck.rows[0];
     let customerDetails = {
-      customer_name: booking.customer_name,
-      address: booking.address,
-      mobile_number: booking.mobile_number,
-      email: booking.email,
-      district: booking.district,
-      state: booking.state
+      customer_name: req.body.customer_name || booking.customer_name,
+      address: req.body.address || booking.address,
+      mobile_number: req.body.mobile_number || booking.mobile_number,
+      email: req.body.email || booking.email,
+      district: req.body.district || booking.district,
+      state: req.body.state || booking.state
     };
     let agent_name = null;
 
@@ -1257,9 +1257,17 @@ exports.updateBooking = async (req, res) => {
         [booking.customer_id]
       );
       if (customerCheck.rows.length > 0) {
-        customerDetails = customerCheck.rows[0];
-        if (customerDetails.customer_type === 'Customer of Selected Agent' && customerDetails.agent_id) {
-          const agentCheck = await pool.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerDetails.agent_id]);
+        customerDetails = {
+          customer_name: req.body.customer_name || customerCheck.rows[0].customer_name || booking.customer_name,
+          address: req.body.address || customerCheck.rows[0].address || booking.address,
+          mobile_number: req.body.mobile_number || customerCheck.rows[0].mobile_number || booking.mobile_number,
+          email: req.body.email || customerCheck.rows[0].email || booking.email,
+          district: req.body.district || customerCheck.rows[0].district || booking.district,
+          state: req.body.state || customerCheck.rows[0].state || booking.state,
+          customer_type: customerCheck.rows[0].customer_type
+        };
+        if (customerCheck.rows[0].customer_type === 'Customer of Selected Agent' && customerCheck.rows[0].agent_id) {
+          const agentCheck = await pool.query('SELECT customer_name FROM public.customers WHERE id = $1', [customerCheck.rows[0].agent_id]);
           if (agentCheck.rows.length > 0) agent_name = agentCheck.rows[0].customer_name;
         }
       }
@@ -1279,9 +1287,9 @@ exports.updateBooking = async (req, res) => {
           try {
             const tableName = product_type.toLowerCase().replace(/\s+/g, '_');
             const productCheck = await pool.query(`SELECT per FROM public.${tableName} WHERE id = $1`, [id]);
-            if (productCheck.rows.length === 0)
-              return res.status(404).json({ message: `Product ${id} of type ${product_type} not found or unavailable`, order_id });
-            productPer = productCheck.rows[0].per || productPer;
+            if (productCheck.rows.length > 0 && productCheck.rows[0].per) {
+              productPer = productCheck.rows[0].per;
+            }
           } catch (checkErr) {
             console.warn(`Product verification warning for ${id}:`, checkErr.message);
           }
@@ -1294,7 +1302,7 @@ exports.updateBooking = async (req, res) => {
     if (products || parsedTotal !== undefined) {
       const pdfResult = await generatePDF(
         'invoice',
-        { order_id, customer_type: booking.customer_type, total: parsedTotal || parseFloat(booking.total || 0), agent_name },
+        { order_id, customer_type: req.body.customer_type || booking.customer_type, total: parsedTotal || parseFloat(booking.total || 0), agent_name },
         customerDetails,
         enhancedProducts,
         {
@@ -1345,6 +1353,34 @@ exports.updateBooking = async (req, res) => {
       updateFields.push(`status = $${paramIndex++}`);
       updateValues.push(status);
     }
+    if (req.body.customer_name) {
+      updateFields.push(`customer_name = $${paramIndex++}`);
+      updateValues.push(req.body.customer_name);
+    }
+    if (req.body.address) {
+      updateFields.push(`address = $${paramIndex++}`);
+      updateValues.push(req.body.address);
+    }
+    if (req.body.mobile_number) {
+      updateFields.push(`mobile_number = $${paramIndex++}`);
+      updateValues.push(req.body.mobile_number);
+    }
+    if (req.body.email !== undefined) {
+      updateFields.push(`email = $${paramIndex++}`);
+      updateValues.push(req.body.email);
+    }
+    if (req.body.district) {
+      updateFields.push(`district = $${paramIndex++}`);
+      updateValues.push(req.body.district);
+    }
+    if (req.body.state) {
+      updateFields.push(`state = $${paramIndex++}`);
+      updateValues.push(req.body.state);
+    }
+    if (req.body.customer_type) {
+      updateFields.push(`customer_type = $${paramIndex++}`);
+      updateValues.push(req.body.customer_type);
+    }
     if (transport_details) {
       updateFields.push(`transport_details = $${paramIndex++}`);
       updateValues.push(JSON.stringify(transport_details));
@@ -1359,34 +1395,43 @@ exports.updateBooking = async (req, res) => {
       UPDATE public.bookings 
       SET ${updateFields.join(', ')}
       WHERE order_id = $${paramIndex}
-      RETURNING id, order_id, status
+      RETURNING *
     `;
     updateValues.push(order_id);
 
     const result = await pool.query(query, updateValues);
 
-    if (!fs.existsSync(pdfPath)) {
-      console.error(`Failed: PDF file not found at ${pdfPath} for order_id ${order_id}`);
-      return res.status(500).json({ message: 'PDF file not found after update', error: 'File system error', order_id });
-    }
-    fs.access(pdfPath, fs.constants.R_OK, (err) => {
-      if (err) {
-        console.error(`Failed: Cannot read PDF file at ${pdfPath} for order_id ${order_id}: ${err.message}`);
-        return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message, order_id });
+    if (req.query.download === 'true' || req.headers.accept === 'application/pdf') {
+      if (!fs.existsSync(pdfPath)) {
+        console.error(`Failed: PDF file not found at ${pdfPath} for order_id ${order_id}`);
+        return res.status(500).json({ message: 'PDF file not found after update', error: 'File system error', order_id });
       }
-      const safeCustomerName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
-      const readStream = fs.createReadStream(pdfPath);
-      readStream.on('error', (streamErr) => {
-        console.error(`Failed: Failed to stream PDF for order_id ${order_id}: ${streamErr.message}`);
-        if (!res.headersSent) {
-          res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message, order_id });
+      fs.access(pdfPath, fs.constants.R_OK, (err) => {
+        if (err) {
+          console.error(`Failed: Cannot read PDF file at ${pdfPath} for order_id ${order_id}: ${err.message}`);
+          return res.status(500).json({ message: `Cannot read PDF file at ${pdfPath}`, error: err.message, order_id });
         }
+        const safeCustomerName = (customerDetails.customer_name || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=${safeCustomerName}-${order_id}-invoice.pdf`);
+        const readStream = fs.createReadStream(pdfPath);
+        readStream.on('error', (streamErr) => {
+          console.error(`Failed: Failed to stream PDF for order_id ${order_id}: ${streamErr.message}`);
+          if (!res.headersSent) {
+            res.status(500).json({ message: 'Failed to stream PDF', error: streamErr.message, order_id });
+          }
+        });
+        readStream.pipe(res);
+        console.log(`PDF streaming initiated for order_id: ${order_id}`);
       });
-      readStream.pipe(res);
-      console.log(`PDF streaming initiated for order_id: ${order_id}`);
-    });
+    } else {
+      res.status(200).json({
+        message: 'Booking updated successfully',
+        order_id: result.rows[0].order_id,
+        pdf_path: pdfPath,
+        booking: result.rows[0]
+      });
+    }
   } catch (err) {
     console.error(`Failed: Failed to update booking for order_id ${req.params.order_id}: ${err.message}`);
     res.status(500).json({ message: 'Failed to update booking', error: err.message, order_id: req.params.order_id });
