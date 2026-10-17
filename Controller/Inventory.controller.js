@@ -1,11 +1,12 @@
+require('dotenv').config();
 const { Pool } = require("pg");
 const cloudinary = require("cloudinary").v2;
 
 // Configure Cloudinary
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+  cloud_name: (process.env.CLOUDINARY_CLOUD_NAME || "").trim(),
+  api_key: (process.env.CLOUDINARY_API_KEY || "").trim(),
+  api_secret: (process.env.CLOUDINARY_API_SECRET || "").trim(),
 });
 
 const pool = new Pool({
@@ -567,3 +568,151 @@ exports.getFreeProducts = async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch free products', error: err.message });
   }
 };
+
+exports.updateProductImages = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { tableName, id } = req.params;
+    const { mode = "replace" } = req.body;
+    const files = req.files || [];
+
+    if (files.length === 0) {
+      return res.status(400).json({ message: "No image files provided" });
+    }
+
+    const currentProduct = await client.query(`SELECT image FROM public.${tableName} WHERE id = $1`, [id]);
+    if (currentProduct.rows.length === 0) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    let existingImages = [];
+    if (currentProduct.rows[0].image) {
+      try {
+        existingImages = typeof currentProduct.rows[0].image === "string"
+          ? JSON.parse(currentProduct.rows[0].image)
+          : currentProduct.rows[0].image;
+      } catch (e) {
+        existingImages = [];
+      }
+    }
+
+    const newImageUrls = files.map((file) => file.path);
+    let finalImages = [];
+
+    if (mode === "append") {
+      finalImages = [...existingImages, ...newImageUrls];
+    } else {
+      finalImages = newImageUrls;
+      // If replacing, clean up old Cloudinary images
+      for (const url of existingImages) {
+        if (!url || typeof url !== "string") continue;
+        const publicId = url.match(/\/mnc_products\/(.+?)\./)?.[1];
+        if (publicId) {
+          try {
+            await cloudinary.uploader.destroy(`mnc_products/${publicId}`, {
+              resource_type: url.includes("/video/") ? "video" : "image",
+            });
+          } catch (e) {
+            console.warn("Failed to delete old image from Cloudinary:", e.message);
+          }
+        }
+      }
+    }
+
+    await client.query(
+      `UPDATE public.${tableName} SET image = $1 WHERE id = $2`,
+      [finalImages.length > 0 ? JSON.stringify(finalImages) : null, id]
+    );
+
+    res.status(200).json({
+      message: "Product images updated successfully",
+      images: finalImages,
+    });
+  } catch (err) {
+    console.error("Error in updateProductImages:", err);
+    res.status(500).json({ message: "Failed to update product images", error: err.message });
+  } finally {
+    client.release();
+  }
+};
+
+exports.migrateCloudinaryImages = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const typesRes = await client.query('SELECT DISTINCT product_type FROM public.products');
+    const productTypes = typesRes.rows.map((r) => r.product_type);
+    let migratedCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+    const errors = [];
+
+    for (const pType of productTypes) {
+      const tableName = pType.toLowerCase().replace(/\s+/g, '_');
+      const tableExists = await client.query(
+        "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1)",
+        [tableName]
+      );
+      if (!tableExists.rows[0].exists) continue;
+
+      const productsRes = await client.query(`SELECT id, serial_number, productname, image FROM public.${tableName}`);
+      for (const prod of productsRes.rows) {
+        if (!prod.image) continue;
+        let images = [];
+        try {
+          images = typeof prod.image === 'string' ? JSON.parse(prod.image) : prod.image;
+          if (!Array.isArray(images)) images = [prod.image];
+        } catch {
+          if (typeof prod.image === 'string' && prod.image.startsWith('http')) images = [prod.image];
+          else continue;
+        }
+
+        let updated = false;
+        const newImages = [];
+        for (const oldUrl of images) {
+          if (!oldUrl || typeof oldUrl !== 'string') continue;
+          if (oldUrl.includes(`res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/`)) {
+            skippedCount++;
+            newImages.push(oldUrl);
+            continue;
+          }
+
+          try {
+            const isVideo = oldUrl.includes('/video/');
+            const uploadResult = await cloudinary.uploader.upload(oldUrl, {
+              folder: 'mnc_products',
+              resource_type: isVideo ? 'video' : 'image',
+            });
+            newImages.push(uploadResult.secure_url);
+            migratedCount++;
+            updated = true;
+          } catch (err) {
+            failedCount++;
+            newImages.push(oldUrl);
+            errors.push({ serial: prod.serial_number, product: prod.productname, url: oldUrl, error: err.message });
+          }
+        }
+
+        if (updated) {
+          await client.query(`UPDATE public.${tableName} SET image = $1 WHERE id = $2`, [
+            JSON.stringify(newImages),
+            prod.id,
+          ]);
+        }
+      }
+    }
+
+    res.status(200).json({
+      message: 'Cloudinary migration completed',
+      migratedCount,
+      skippedCount,
+      failedCount,
+      errors,
+    });
+  } catch (err) {
+    console.error('Migration error:', err);
+    res.status(500).json({ message: 'Migration failed', error: err.message });
+  } finally {
+    client.release();
+  }
+};
+

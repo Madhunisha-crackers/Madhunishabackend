@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { addProduct, getProducts, addProductType, getProductTypes, updateProduct, deleteProduct, toggleProductStatus, toggleFastRunning, deleteProductType, toggleFreeGift, getFreeProducts } = require('../Controller/Inventory.controller');
+const { addProduct, getProducts, addProductType, getProductTypes, updateProduct, deleteProduct, toggleProductStatus, toggleFastRunning, deleteProductType, toggleFreeGift, getFreeProducts, updateProductImages, migrateCloudinaryImages } = require('../Controller/Inventory.controller');
 const multer = require('multer');
 const { storage } = require('../Config/cloudinary');
 
@@ -16,6 +16,8 @@ router.post('/product-types', addProductType);
 router.get('/product-types', getProductTypes);
 router.delete('/product-types/:productType', deleteProductType);
 router.put('/products/:tableName/:id', upload.array('images'), updateProduct);
+router.patch('/products/:tableName/:id/images', upload.array('images'), updateProductImages);
+router.post('/products/migrate-cloudinary-images', migrateCloudinaryImages);
 router.delete('/products/:tableName/:id', deleteProduct);
 router.patch('/products/:tableName/:id/toggle-status', toggleProductStatus);
 router.patch('/products/:tableName/:id/toggle-fast-running', toggleFastRunning);

@@ -20,6 +20,7 @@
     "xlsx": "^0.18.5"
   },
   "scripts": {
-    "start": "nodemon server.js"
+    "start": "nodemon server.js",
+    "migrate-images": "node scripts/migrateCloudinaryImages.js"
   }
 }
